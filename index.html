@@ -1,0 +1,1128 @@
+<!DOCTYPE html>
+<html>
+    <head>
+        <meta charset="UTF-8">
+    	<script src="https://bitcoincore.tech/apps/bitcoinjs-ui/lib/bitcoinjs-lib.js"></script>
+    	<script src="https://bundle.run/browserify-cipher@1.0.1"></script>
+    	<script src="https://bundle.run/noble-secp256k1@1.2.14"></script>
+		<script src="https://bundle.run/varuint-bitcoin@1.1.2"></script>
+		<script src="https://bundle.run/buffer@6.0.3"></script>
+		<script>var Buffer = buffer.Buffer;</script>
+        <style>
+            * {
+                box-sizing: border-box;
+                font-size: 1.15rem;
+                font-family: Arial, sans-serif;
+            }
+            html {
+                max-width: 70ch;
+                padding: 3rem 1rem;
+                margin: auto;
+                line-height: 1.25;
+            }
+            h1 {
+                font-size: 2rem;
+            }
+            h2 {
+                font-size: 1.5rem;
+            }
+            input {
+                line-height: 1.25;
+                width: 100%;
+                height: 1.8rem;
+                font-size: 1.15rem;
+                border: 1px solid grey;
+            }
+            input[ type="checkbox" ] {
+            	line-height: normal;
+            	width: 1rem;
+            	height: 1rem;
+            	font-size: medium;
+            	border: none;
+            }
+	        .offer, .bordered {
+	        	border: 1px solid black;
+	        	padding: 1rem;
+	        	margin-bottom: 1rem;
+	        }
+	        .offer div {
+	        	margin-bottom: 1rem;
+	        }
+	        .offer .fill_in_details, .bordered .fill_in_details {
+	        	display: none;
+	        }
+	        .offer_wizard {
+	        	display: none;
+	        }
+	        .flexy_box {
+	        	display: flex;
+	        	justify-content: space-around;
+	        }
+	        .pick_borrow_or_lend {
+	        	display: none;
+	        }
+	        .minmax {
+	        	margin-top: 0px;
+	        }
+	        .loan_offer {
+	        	display: none;
+	        }
+	        .offer_url {
+	        	display: none;
+	        	word-wrap: break-word;
+	        }
+        </style>
+        <script>
+            var $ = document.querySelector.bind( document );
+            var $$ = document.querySelectorAll.bind( document );
+            var url_params = new URLSearchParams( window.location.search );
+            var url_keys = url_params.keys();
+            var $_GET = {}
+            for ( var key of url_keys ) $_GET[ key ] = url_params.get( key );
+			var myKeyPair = bitcoinjs.ECPair.makeRandom();
+			var myBTCKey = myKeyPair.publicKey;
+    		var preimage_for_lender = bitcoinjs.ECPair.makeRandom().privateKey.toString( "hex" );
+    		var pmthash_for_lender = bitcoinjs.crypto.hash160( buffer.Buffer.from( preimage_for_lender, "hex" ) ).toString( "hex" );
+        </script>
+	    <script>
+			function hexToBytes( hex ) {
+			    return Uint8Array.from( hex.match( /.{1,2}/g ).map( ( byte ) => parseInt( byte, 16 ) ) );
+			}
+
+		    function isValidAddress( address ) {
+			    try{
+			        return ( typeof( bitcoinjs.address.toOutputScript( address, bitcoinjs.networks.testnet ) ) == "object" );
+			    } catch( e ) {
+			        return;
+			    }
+			}
+		    function hexToBytes( hex ) {
+		        return Uint8Array.from( hex.match( /.{1,2}/g ).map( ( byte ) => parseInt( byte, 16 ) ) );
+		    }
+
+		    function base64ToHex( str ) {
+		        var raw = atob( str );
+		        var result = '';
+		        var i; for ( i=0; i<raw.length; i++ ) {
+		            var hex = raw.charCodeAt( i ).toString( 16 );
+		            result += ( hex.length === 2 ? hex : '0' + hex );
+		        }
+		        return result;
+		    }
+			function encrypt( privkey, pubkey, text ) {
+			    var key = nobleSecp256k1.getSharedSecret( privkey, '02' + pubkey, true ).substring( 2 );
+			    var iv = window.crypto.getRandomValues(new Uint8Array(16));
+			    var cipher = browserifyCipher.createCipheriv( 'aes-256-cbc', hexToBytes( key ), iv );
+			    var encryptedMessage = cipher.update(text,"utf8","base64");
+			    emsg = encryptedMessage + cipher.final( "base64" );
+			    var uint8View = new Uint8Array( iv.buffer );
+			    var decoder = new TextDecoder();
+			    return emsg + "?iv=" + btoa( String.fromCharCode.apply( null, uint8View ) );
+			}
+			function decrypt( privkey, pubkey, ciphertext ) {
+			    var [ emsg, iv ] = ciphertext.split( "?iv=" );
+			    var key = nobleSecp256k1.getSharedSecret( privkey, '02' + pubkey, true ).substring( 2 );
+			    var decipher = browserifyCipher.createDecipheriv(
+			        'aes-256-cbc',
+			        hexToBytes( key ),
+			        hexToBytes( base64ToHex( iv ) )
+			    );
+			    var decryptedMessage = decipher.update( emsg, "base64" );
+			    dmsg = decryptedMessage + decipher.final( "utf8" );
+			    return dmsg;
+			}
+			async function getBitcoinPriceFromCoinbase() {
+			    	var data = await getData( "https://api.coinbase.com/v2/prices/BTC-USD/spot" );
+			    	var json = JSON.parse( data );
+			    	var price = json[ "data" ][ "amount" ];
+			    	return price;
+			}
+	    	async function getData( url ) {
+	    	    var rtext = "";
+	    	    function inner_get( url ) {
+	    	        var xhttp = new XMLHttpRequest();
+	    	        xhttp.open( "GET", url, true );
+	    	        xhttp.send();
+	    	        return xhttp;
+	    	    }
+	    	    var data = inner_get( url );
+	    	    data.onerror = function( e ) {
+	    	        rtext = "error";
+	    	    }
+	    	    async function isResponseReady() {
+	    	        return new Promise( function( resolve, reject ) {
+	    	            if ( rtext == "error" ) {
+	    	                resolve( rtext );
+	    	            }
+	    	            if ( !data.responseText || data.readyState != 4 ) {
+	    	                setTimeout( async function() {
+	    	                    var msg = await isResponseReady();
+	    	                    resolve( msg );
+	    	                }, 50 );
+	    	            } else {
+	    	                resolve( data.responseText );
+	    	            }
+	    	        });
+	    	    }
+	    	    var returnable = await isResponseReady();
+	    	    return returnable;
+	    	}
+			async function postData( url, json, content_type = "", apikey = "" ) {
+			    var rtext = "";
+			    function inner_post( url, json, content_type = "", apikey = "" ) {
+			        var xhttp = new XMLHttpRequest();
+			        xhttp.open( "POST", url, true );
+			        if ( content_type ) {
+			            xhttp.setRequestHeader( `Content-Type`, content_type );
+			        }
+			        if ( apikey ) {
+			            xhttp.setRequestHeader( `X-Api-Key`, apikey );
+			        }
+			        xhttp.send( json );
+			        return xhttp;
+			    }
+			    var data = inner_post( url, json, content_type, apikey );
+			    data.onerror = function( e ) {
+			        rtext = "error";
+			    }
+			    async function isResponseReady() {
+			        return new Promise( function( resolve, reject ) {
+			            if ( rtext == "error" ) {
+			                resolve( rtext );
+			            }
+			            if ( !data.responseText || data.readyState != 4 ) {
+			                setTimeout( async function() {
+			                    var msg = await isResponseReady();
+			                    resolve( msg );
+			                }, 50 );
+			            } else {
+			                resolve( data.responseText );
+			            }
+			        });
+			    }
+			    var returnable = await isResponseReady();
+			    return returnable;
+			}
+
+			async function getBitcoinPriceFromKraken() {
+			    	var data = await getData( "https://api.kraken.com/0/public/Ticker?pair=XBTUSD" );
+			    	var json = JSON.parse( data );
+			    	var price = json[ "result" ][ "XXBTZUSD" ][ "a" ][ 0 ];
+			    	return price;
+			}
+
+			async function getBitcoinPriceFromCoindesk() {
+			    	var data = await getData( "https://api.coindesk.com/v1/bpi/currentprice.json" );
+			    	var json = JSON.parse( data );
+			    	var price = json[ "bpi" ][ "USD" ][ "rate_float" ];
+			    	return price;
+			}
+
+			async function getBitcoinPriceFromGemini() {
+			    	var data = await getData( "https://api.gemini.com/v2/ticker/BTCUSD" );
+			    	var json = JSON.parse( data );
+			    	var price = json[ "bid" ];
+			    	return price;
+			}
+
+			async function getBitcoinPriceFromBybit() {
+			    	var data = await getData( "https://api-testnet.bybit.com/derivatives/v3/public/order-book/L2?category=linear&symbol=BTCUSDT" );
+			    	var json = JSON.parse( data );
+			    	var price = json[ "result" ][ "b" ][ 0 ][ 0 ];
+			    	return price;
+			}
+
+			async function getBitcoinPrice() {
+			    var prices = [];
+			    var cbprice = await getBitcoinPriceFromCoinbase();
+			    var kprice = await getBitcoinPriceFromKraken();
+			    var cdprice = await getBitcoinPriceFromCoindesk();
+			    var gprice = await getBitcoinPriceFromGemini();
+			    var bprice = await getBitcoinPriceFromBybit();
+			    prices.push( Number( cbprice ), Number( kprice ), Number( cdprice ), Number( gprice ), Number( bprice ) );
+			    prices.sort();
+			    //console.log( prices );
+			    return prices[ 2 ];
+			}
+			async function checkPrice() {
+				var price = await getBitcoinPrice();
+				sessionStorage[ "bitcoin_price" ] = price;
+			}
+			function heartbeat() {
+				checkPrice();
+				setTimeout( function() {heartbeat();}, 10000 );
+			}
+			heartbeat();
+			async function satsToBitcoin( sats ) {
+				if ( sats >= 100000000 ) sats = sats * 10;
+			    var number = Number( String( sats ).padStart( 8, "0" ).slice( 0,-9 ) + "." + String( sats ).padStart( 8, "0" ).slice( -9 ) ).toFixed( 8 );
+			    if ( number.slice( -6 ) == "000000" ) number = number.slice( 0, -6 );
+			    return number;
+			}
+			async function satsToDollars( sats ) {
+				if ( sats >= 100000000 ) sats = sats * 10;
+			    var bitcoin_price = sessionStorage[ "bitcoin_price" ];
+			    var value_in_dollars = Number( String( sats ).padStart( 8, "0" ).slice( 0,-9 ) + "." + String( sats ).padStart( 8, "0" ).slice( -9 ) ) * bitcoin_price;
+			    return value_in_dollars;
+			}
+			function isValidJson( content ) {
+		    	if ( !content ) return;
+		    	try {  
+	            	var json = JSON.parse( content );
+		    	} catch ( e ) {
+	            	return;
+		    	}
+		    	return true;
+			}
+    		function generateHtlcWithBorrowerTimelocked( borrowerPubkey, lenderPubkey, pmthash, timelock ) {
+    		  	if ( borrowerPubkey == lenderPubkey ) {
+    		    	alert( `aborting and refreshing the page! Something went terribly wrong, please try again.` );
+    		    	window.location.reload();
+    		  	}
+    		  	var num1 = BigInt( "0x" + borrowerPubkey );
+    		  	var num2 = BigInt( "0x" + lenderPubkey );
+    		  	if ( num1 > num2 ) {
+    		    	var key1 = borrowerPubkey;
+    		    	var key2 = lenderPubkey;
+    		  	} else {
+    		  		var key1 = lenderPubkey;
+	    		    var key2 =borrowerPubkey;
+    		  	}
+    		  	return bitcoinjs.script.fromASM(
+	    		    `
+	    		    	OP_HASH160
+	    		    	${ pmthash }
+	    		    	OP_EQUAL
+	    		    	OP_IF
+	    		            ${ key1 }
+	    		            OP_CHECKSIG
+	    		            OP_SWAP
+	    		            ${ key2 }
+	    		            OP_CHECKSIG
+	    		            OP_ADD
+	    		            OP_2
+	    		            OP_EQUAL
+	    		      	OP_ELSE
+	    		            ${ bitcoinjs.script.number.encode( timelock ).toString( "hex" ) }
+	    		            OP_CHECKLOCKTIMEVERIFY
+	    		            OP_DROP
+	    		            ${ borrowerPubkey }
+	    		            OP_CHECKSIG
+	    		      	OP_ENDIF
+	    		    `
+	    		    .trim()
+	    		    .replace( /\s+/g, " " ),
+    		  	);
+    		}
+
+    		async function getBlockheight() {
+    			var data = await getData( "https://mempool.space/testnet/api/blocks/tip/height" );
+    			return Number( data );
+    		}
+			function make2of2MultisigOutputScript( firstpubkey, secondpubkey ) {
+    		  	var num1 = BigInt( "0x" + firstpubkey );
+    		  	var num2 = BigInt( "0x" + secondpubkey );
+    		  	if ( num1 > num2 ) {
+    		    	var key1 = firstpubkey;
+    		    	var key2 = secondpubkey;
+    		  	} else {
+    		  		var key1 = secondpubkey;
+	    		    var key2 =firstpubkey;
+    		  	}
+			    var p2ms = bitcoinjs.payments.p2ms( {
+			        m: 2, pubkeys: [
+			            buffer.Buffer.from( key1, 'hex' ),
+			            buffer.Buffer.from( key2, 'hex' ),
+			        ], network: bitcoinjs.networks.testnet} );
+			    return p2ms;
+			}
+			function decimalToHex( dec ) {
+			    dec = dec * 100000000;
+			    var hex = dec.toString( 16 );
+			    var padding = "0000000000000000";
+			    padding = padding + hex;
+			    hex = padding.slice( -16 );
+			    return hex;
+			}
+
+			function witnessStackToScriptWitness(witness) {
+			    let buffer2 = buffer.Buffer.allocUnsafe(0);
+			    function writeSlice(slice) {
+			        buffer2 = buffer.Buffer.concat([buffer2, buffer.Buffer.from(slice)]);
+			    }
+			    function writeVarInt(i) {
+			        const currentLen = buffer2.length;
+			        const varintLen = varuintBitcoin.encodingLength(i);
+			        buffer2 = buffer.Buffer.concat([buffer2, buffer.Buffer.allocUnsafe(varintLen)]);
+			        varuintBitcoin.encode(i, buffer2, currentLen);
+			    }
+			    function writeVarSlice(slice) {
+			        writeVarInt(slice.length);
+			        writeSlice(slice);
+			    }
+			    function writeVector(vector) {
+			        writeVarInt(vector.length);
+			        vector.forEach(writeVarSlice);
+			    }
+			    writeVector(witness);
+			    return buffer2;
+			}
+	        function waitSomeSeconds( num ) {
+	            var num = num.toString() + "000";
+	            num = Number( num );
+	            return new Promise( function( resolve, reject ) {
+	                setTimeout( function() { resolve( "" ); }, num );
+	            });
+	        }
+		</script>
+    </head>
+    <body>
+    	<h1>
+    		Loan shark
+    	</h1>
+    	<h2>
+    		Orderbook
+    	</h2>
+    	<p><button class="new_offer">New offer</button><p>
+    	<div class="bordered offer_wizard">
+    		<div class="flexy_box pick_borrow_or_lend">
+	    		<div class="borrow_or_lend"><button class="borrow">I want to borrow bitcoin</button></div>
+	    		<div class="borrow_or_lend"><button class="lend">I want to lend bitcoin</button></div>
+	    	</div>
+	    	<div class="loan_offer">
+	    		<p>
+	    			How much do you want to lend? (in sats)
+	    		</p>
+	    		<div class="flexy_box">
+		    		<div class="min_to_lend">
+		    			<p class="minmax">
+		    				Min
+		    			</p>
+		    			<input type="number" value="546" step="1">
+		    		</div>
+		    		<div class="max_to_lend">
+		    			<p class="minmax">
+		    				Max
+		    			</p>
+		    			<input type="number" value="100000000" step="1">
+		    		</div>
+		    	</div>
+	    		<p>
+	    			Name your fee (as a percentage)
+	    		</p>
+	    		<p><input class="fee_to_borrow" type="number" value="10" step="1" min="0" max="100"></p>
+	    		<p>
+	    			How much collateral must your counterparty post? (as a percentage)
+	    		</p>
+	    		<p><input class="collateral_for_loan" type="number" value="200" step="1" min="1" max="1000"></p>
+	    		<p>
+	    			How long should the loan last?
+		    		<select class="duration_of_loan">
+		    			<option>3 months</option>
+		    			<option>6 months</option>
+		    			<option>12 months</option>
+		    		</select>
+	    		</p>
+	    		<p>
+	    			Keep offer private?
+	    			<input class="privacy_switch" type="checkbox">
+	    		</p>
+	    		<p><button class="submit_loan_offer">Submit</button></p>
+	    	</div>
+    	</div>
+    	<div class="bordered offer_url"></div>
+    	<div class="orderbook"><div>
+	    <script>
+			var { getSharedSecret, schnorr, utils } = nobleSecp256k1;
+			var crypto = window.crypto;
+			var getRand = (size) => crypto.getRandomValues(new Uint8Array(size));
+			var sha256 = bitcoinjs.crypto.sha256;
+			var keypair = bitcoinjs.ECPair.makeRandom();
+			var privKey = keypair.privateKey.toString( "hex" )
+			var pubKey  = keypair.publicKey.toString( "hex" )
+			pubKey      = pubKey.substring( 2 )
+			console.log(pubKey);
+			//var relay = 'wss://relay.damus.io';
+			var relay = 'ws://localhost:8082/';
+			var socket = new WebSocket(relay);
+			socket.addEventListener('message', async function(event) {
+				if ( !event.data ) return;
+				if ( !JSON.parse( event.data )[ 2 ] ) return;
+				event = JSON.parse( event.data )[ 2 ];
+				if ( !event || event === true ) return;
+				if ( event.kind == 10004 ) {
+					//todo: validate what the borrower sent
+					var content = decrypt( privKey, event.pubkey, event.content );
+					content = JSON.parse( content );
+		    		var borrowerKeypair = bitcoinjs.ECPair.fromPublicKey( Buffer.from( content.btcpubkey, "hex" ) );
+		    		var borrowerPubkey = borrowerKeypair.publicKey.toString( "hex" );
+		    		var lenderKeypair = myKeyPair;
+		    		var lenderPubkey = lenderKeypair.publicKey.toString( "hex" );
+		    		var pmthash = pmthash_for_lender;
+		    		//var blockheight = await getBlockheight();
+		    		var blockheight = prompt( "Enter blockheight" );
+		    		blockheight = Number( blockheight );
+		    		var timelock = blockheight + 10;
+		    		console.log( "inputs to witness script: borrowerPubkey:", borrowerPubkey, "lenderPubkey:", lenderPubkey, "pmthash:", pmthash, "timelock:", timelock );
+		    		var witness_script = generateHtlcWithBorrowerTimelocked( borrowerPubkey, lenderPubkey, pmthash, timelock );
+		    		var htlc_hash160sha256 = bitcoinjs.crypto.hash160( buffer.Buffer.from( '0020' + bitcoinjs.crypto.sha256( witness_script ).toString( 'hex' ), 'hex' ) );
+		    		var p2wsh = bitcoinjs.payments.p2wsh({redeem: {output: witness_script, network: bitcoinjs.networks.testnet}, network: bitcoinjs.networks.testnet });
+		    		var p2sh = bitcoinjs.payments.p2sh({redeem: p2wsh, network: bitcoinjs.networks.testnet});
+		    		var htlc_address = p2sh.address;
+		    		console.log( "htlc address:", htlc_address );
+		    		var claimed_htlc_address = content.htlc_address;
+		    		if ( claimed_htlc_address != htlc_address ) {
+		    			//todo: send back failure message
+		    			alert( "wrong htlc address" );
+		    			return;
+		    		}
+					var p2ms = make2of2MultisigOutputScript( borrowerPubkey, lenderPubkey );
+					var multisig_hash160sha256 = bitcoinjs.crypto.hash160( buffer.Buffer.from( '0020' + bitcoinjs.crypto.sha256( p2ms.output ).toString( 'hex' ), 'hex' ) );
+					var p2wsh = bitcoinjs.payments.p2wsh({redeem: p2ms, network: bitcoinjs.networks.testnet});
+					var p2sh = bitcoinjs.payments.p2sh({redeem: p2wsh, network: bitcoinjs.networks.testnet});
+					var multisig_address = p2sh.address;
+					console.log( "multisig:", multisig_address );
+					var pubkey = borrowerPubkey;
+					var txid = content.txid;
+					var vout = content.vout;
+					//var prev_tx_hex = await getData( `https://mempool.space/testnet/api/tx/${txid}/hex` );
+					var prev_tx_hex = content.txhex;
+					//todo: during validation, check if principle is between min and max, inclusive
+					var txid_2 = content.txid_2;
+					var vout_2 = content.vout_2;
+					//var prev_tx_hex = await getData( `https://mempool.space/testnet/api/tx/${txid}/hex` );
+					var prev_tx_hex_2 = content.txhex_2;
+					//todo: during validation, check if principle is between min and max, inclusive
+		    		var sats = content.principle;
+		    		var dollars = await satsToDollars( sats );
+		    		var usdt_collateral = ( Number( dollars ) * ( content.collateral_for_loan / 100 ) ).toFixed( 2 );
+					var claimed_usdt_collateral = content.usdt_collateral;
+					//halt if the user's usdt collateral amount is different from ours by more than 1%
+					var rounded_amount = Math.round( Math.abs( 1 - ( claimed_usdt_collateral / usdt_collateral ) ) * 100 );
+					if ( rounded_amount > 1 ) {
+		    			//todo: send back failure message
+		    			alert( "Error. Claimed collateral amount: " + claimed_usdt_collateral + " Real collateral amount: " + usdt_collateral );
+		    			return;
+					}
+					usdt_collateral = claimed_usdt_collateral;
+					var omni_payload = "6f6d6e690000000000000003" + decimalToHex( usdt_collateral );
+					var from_amount = content.sat_value;
+					var mining_fee = 500;
+					var sender = bitcoinjs.ECPair.fromPublicKey(
+					  buffer.Buffer.from( content.btcpubkey, 'hex' ),
+					  bitcoinjs.networks.testnet
+					);
+					var redeemscript = "0014" + bitcoinjs.crypto.ripemd160( bitcoinjs.crypto.sha256( sender.publicKey ) ).toString( 'hex' );
+					//the following psbt is for the stage 1 funder
+					var psbt = new bitcoinjs.Psbt({
+					  network: bitcoinjs.networks.testnet,
+					});
+					var data = buffer.Buffer.from( omni_payload, 'hex' );
+					var embed = bitcoinjs.payments.embed({ data: [data] });
+					console.log( "txhex:", prev_tx_hex );
+					psbt.addInput({
+					  hash: txid,
+					  index: vout,
+					  nonWitnessUtxo: buffer.Buffer.from(
+					    prev_tx_hex,
+					    'hex',
+					  ),
+					  redeemScript: buffer.Buffer.from( redeemscript, "hex" ),
+					});
+					psbt.addInput({
+					  hash: txid_2,
+					  index: vout_2,
+					  nonWitnessUtxo: buffer.Buffer.from(
+					    prev_tx_hex_2,
+					    'hex',
+					  ),
+					  redeemScript: buffer.Buffer.from( redeemscript, "hex" ),
+					});
+					psbt.addOutput({
+					  script: embed.output,
+					  value: 0,
+					});
+					psbt.addOutput({
+					  address: htlc_address,
+					  value: ( from_amount + 2000 ) - mining_fee,
+					});
+
+					var unsigned_stage_1_funder_rawtx = psbt.data.globalMap.unsignedTx.tx.toHex()
+					var unsigned_stage_1_funder_txid = bitcoinjs.Transaction.fromHex( unsigned_stage_1_funder_rawtx ).getId();
+					console.log( "unsigned stage 1 funder, pre scriptsig:", unsigned_stage_1_funder_rawtx );
+					console.log( "unsigned stage 1 funder, pre scriptsig txid:", unsigned_stage_1_funder_txid );
+
+					var tx = unsigned_stage_1_funder_rawtx.split( "ffffffff" );
+					var scriptsig = '17160014' + bitcoinjs.crypto.hash160(sender.publicKey).toString('hex');
+					tx[ 0 ] = tx[ 0 ].slice( 0, -2 ) + scriptsig;
+					tx[ 1 ] = tx[ 1 ].slice( 0, -2 ) + scriptsig;
+					tx = tx.join( "ffffffff" );
+					var stage_1_funder_with_scriptsig_rawtx = tx;
+					console.log( "unsigned stage 1 funder with scriptsig:", stage_1_funder_with_scriptsig_rawtx );
+					var stage_1_funder_with_scriptsig_txid = bitcoinjs.Transaction.fromHex( stage_1_funder_with_scriptsig_rawtx ).getId();
+					console.log( "unsigned stage 1 funder with scriptsig txid:", stage_1_funder_with_scriptsig_txid );
+					if ( content.stage_1_funder_txid != stage_1_funder_with_scriptsig_txid ) {
+						//todo: send back failure message
+						alert( "error. Claimed stage 1 funder txid: " + content.stage_1_funder_txid + "Real txid: " + stage_1_funder_with_scriptsig_txid );
+						return;
+					}
+					var unsigned_stage_1_funder_psbt = psbt.toHex();
+
+					var ecPair = bitcoinjs.ECPair.fromPublicKey( borrowerKeypair.publicKey, bitcoinjs.networks.testnet );
+					var { address } = bitcoinjs.payments.p2sh({ 
+				       redeem: bitcoinjs.payments.p2wpkh({ pubkey: ecPair.publicKey, network: bitcoinjs.networks.testnet }), 
+				       network: bitcoinjs.networks.testnet 
+				    });
+
+					//var address_to_check = address;
+					var address_to_check = `1HckjUpRGcrrRAtFaaCAUaGjsPx9oYmLaZ`;
+					var data = await postData( `https://api.omniwallet.org/v2/address/addr/`, `addr=${address_to_check}`, "application/x-www-form-urlencoded" );
+
+					var property_i_seek;
+					try {
+						data = JSON.parse( data );
+					} catch( e ) {}
+					if ( Object.keys( data )[ 0 ] && data[ Object.keys( data )[ 0 ] ][ "balance" ] ) {
+						data[ Object.keys( data )[ 0 ] ][ "balance" ].every( function( possibility ) {
+						    if ( Number( possibility[ "id" ] ) == 31 ) {
+						        property_i_seek = possibility;
+						        return;
+						    }
+						    return true;
+						});
+					} else {
+						property_i_seek = {}
+						property_i_seek[ "reserved" ] = 0;
+						property_i_seek[ "frozen" ] = 0;
+						property_i_seek[ "pendingneg" ] = 0;
+						property_i_seek[ "value" ] = 111111111111111111;
+					}
+
+					var balance = ( Number( property_i_seek[ "value" ] ) - Number( property_i_seek[ "reserved" ] ) - Number( property_i_seek[ "frozen" ] ) - Number( property_i_seek[ "pendingneg" ] ) ) / 100000000;
+
+					var conf = confirm( `Please confirm that your counterparty's address, ${address}, has the right amount of usdt, ${usdt_collateral}` );
+					if ( !conf || ( balance < Number( usdt_collateral ) ) ) {
+						//todo: send back failure message
+						alert( "Error, the borrower does not have enough usdt in his address" );
+						return;
+					}
+					//the following psbt is for the stage 2 funder
+					var new_from_amount = ( from_amount + 2000 ) - mining_fee;
+					var mining_fee = 500;
+					var to_amount = new_from_amount - mining_fee;
+					var psbt = new bitcoinjs.Psbt({
+					  network: bitcoinjs.networks.testnet,
+					});
+					var data = buffer.Buffer.from( omni_payload, 'hex' );
+					var embed = bitcoinjs.payments.embed({ data: [data] });
+					psbt.addInput({
+					  hash: stage_1_funder_with_scriptsig_txid,
+					  index: vout,
+					  sequence: 0xfffffffe,
+					  redeemScript: buffer.Buffer.from('0020' + bitcoinjs.crypto.sha256(witness_script).toString('hex'), 'hex'),
+					  witnessScript: p2wsh.redeem.output,
+					  witnessUtxo: {
+					    script: buffer.Buffer.from('a914' + htlc_hash160sha256.toString('hex') + '87', 'hex'),
+					    value: ( from_amount + 2000 ),
+					  },
+					  nonWitnessUtxo: buffer.Buffer.from(
+					    prev_tx_hex,
+					    'hex',
+					  )
+					});
+					psbt.addOutput({
+					  script: embed.output,
+					  value: 0,
+					});
+					psbt.addOutput({
+					  address: multisig_address,
+					  value: to_amount,
+					});
+					var getFinalScripts = ( txindex, input, script ) => {
+					  // Step 1: Check to make sure the meaningful locking script matches what you expect.
+					  var decompiled = bitcoinjs.script.decompile( script )
+					  if ( !decompiled ) {
+					    throw new Error( `Can not finalize input #${txindex}` )
+					  }
+
+					  // Step 2: Create final scripts
+					  var witnessStack = bitcoinjs.payments.p2wsh({
+					    redeem: {
+					      output: script,
+					      input: bitcoinjs.script.compile([
+					        input.partialSig[0].signature,
+					        input.partialSig[1].signature,
+					        buffer.Buffer.from( preimage_for_lender, 'hex' ),
+					      ]),
+					    }
+					  });
+					  return {
+					    finalScriptWitness: witnessStackToScriptWitness( witnessStack.witness ),
+					    finalScriptSig: buffer.Buffer.from('220020' + bitcoinjs.crypto.sha256(witness_script).toString('hex'), 'hex')
+					  }
+					}
+
+					var stage_2_funding_rawtx = psbt.data.globalMap.unsignedTx.tx.toHex();
+					var stage_2_funding_txid = psbt.data.globalMap.unsignedTx.tx.getId();
+					console.log( "unsigned stage 2 funder, no scriptsig:", stage_2_funding_rawtx );
+					console.log( "unsigned stage 2 funder, no scriptsig txid:", stage_2_funding_txid );
+
+					var stage_2_funder_slice_1 = stage_2_funding_rawtx.slice(0, 82)
+					var stage_2_funder_slice_2 = stage_2_funding_rawtx.slice(84)
+					var scriptsig = '23220020' + bitcoinjs.crypto.sha256(witness_script).toString('hex');
+					var stage_2_funder_with_scriptsig_rawtx = stage_2_funder_slice_1 + scriptsig + stage_2_funder_slice_2;
+					var stage_2_funder_with_scriptsig_txid = bitcoinjs.Transaction.fromHex( stage_2_funder_with_scriptsig_rawtx ).getId();
+					console.log( "unsigned stage 2 funder with scriptsig:", stage_2_funder_with_scriptsig_rawtx );
+					console.log( "unsigned stage 2 funder with scriptsig txid:", stage_2_funder_with_scriptsig_txid );
+
+					var stage_2_funder_psbt_hex = psbt.toHex();
+					var claimed_stage_2_psbt = bitcoinjs.Psbt.fromHex( content.stage_2_funder_psbt );
+					var claimed_stage_2_psbt_txid = claimed_stage_2_psbt.data.globalMap.unsignedTx.tx.getId();
+					if ( claimed_stage_2_psbt_txid != stage_2_funding_txid ) {
+						//todo: send back failure message
+						alert( "Error. Claimed stage 2 txid: " + claimed_stage_2_psbt_txid + "Real stage 2 txid: " + stage_2_funding_txid );
+						return;
+					}
+					//validate the borrower's signature
+					claimed_stage_2_psbt.signInput( 0, lenderKeypair );
+					console.log( "stage_2_funder_fully_signed_psbt:", claimed_stage_2_psbt.toHex() );
+					claimed_stage_2_psbt.validateSignaturesOfInput( 0 );
+					claimed_stage_2_psbt.finalizeInput( 0, getFinalScripts );
+					console.log( "stage_2_funder_fully_signed_tx:", claimed_stage_2_psbt.extractTransaction().toHex() );
+				}
+				if ( event.kind != 10062 ) return;
+				if ( $_GET[ "offer" ] && event.pubkey != $_GET[ "offer" ] ) return;
+			 	var content = JSON.parse( event[ "content" ] );
+			 	var div = document.createElement( 'div' );
+			 	var min_to_lend = content.min_to_lend;
+			 	var max_to_lend = content.max_to_lend;
+			 	if ( min_to_lend > 100000 ) {
+			 		min_to_lend = await satsToBitcoin( min_to_lend ) + " btc";
+			 	} else {
+			 		min_to_lend = min_to_lend.toLocaleString() + " sats";
+			 	}
+			 	if ( max_to_lend > 100000 ) {
+			 		max_to_lend = await satsToBitcoin( max_to_lend ) + " btc";
+			 	} else {
+			 		max_to_lend = max_to_lend.toLocaleString() + " sats";
+			 	}
+			 	if ( $( `div[ data-pubkey="${event.pubkey}" ]` ) ) $( `div[ data-pubkey="${event.pubkey}" ]` ).remove();
+			 	div.innerHTML = `<div class="offer" data-pubkey="${event.pubkey}" data-btckey="${content.btcpubkey}" data-pmthash="${content.payment_hash}">
+		    		<div>You will get: <span><span class="min" data-minval="${content.min_to_lend}">${min_to_lend}</span> - <span class="max" data-maxval="${content.max_to_lend}">${max_to_lend}</span></span></div>
+		    		<div>You must pay: <span>principle plus ${content.fee_to_borrow}%</span></div>
+		    		<div>Collateral: <span>${content.collateral_for_loan}% principle in omni usdt</span></div>
+		    		<div>Loan duration: <span>${content.duration_of_loan} months</span></div>
+		    		<div><button class="accept_offer">Accept offer</button></div>
+		    		<div class="fill_in_details">
+		    			<p>
+		    				Enter how many sats you want to borrow (use sats and no decimal points)
+		    			</p>
+		    			<p>
+		    				<input type="number" step="1" class="enter_amount">
+		    			</p>
+		    			<p>
+		    				Enter a bitcoin address where you want to receive the money
+		    			</p>
+		    			<p>
+		    				<input class="enter_address">
+		    			</p>
+		    			<p>
+		    				<button class="finalize_acceptance">Submit</button>
+		    			</p>
+		    		</div>
+		    	</div>`;
+		    	$( '.orderbook' ).append( div );
+		    	$( `div[ data-pubkey="${event.pubkey}" ] .accept_offer` ).onclick = function() {
+					var ecPair = bitcoinjs.ECPair.fromPublicKey( myBTCKey, bitcoinjs.networks.testnet );
+					var { address } = bitcoinjs.payments.p2sh({ 
+				       redeem: bitcoinjs.payments.p2wpkh({ pubkey: ecPair.publicKey, network: bitcoinjs.networks.testnet }), 
+				       network: bitcoinjs.networks.testnet 
+				    });
+					$( `div[ data-pubkey="${event.pubkey}" ] .fill_in_details` ).style.display = "block";
+					var maxval = $( `div[ data-pubkey="${event.pubkey}" ] .max` ).getAttribute( "data-maxval" )
+					var minval = $( `div[ data-pubkey="${event.pubkey}" ] .min` ).getAttribute( "data-minval" )
+					$( `div[ data-pubkey="${event.pubkey}" ] .enter_amount` ).value = maxval;
+					$( `div[ data-pubkey="${event.pubkey}" ] .enter_amount` ).max = maxval;
+					$( `div[ data-pubkey="${event.pubkey}" ] .enter_amount` ).min = minval;
+			    	$( `div[ data-pubkey="${event.pubkey}" ] .finalize_acceptance` ).onclick = async function() {
+			    		var sats = $( `div[ data-pubkey="${event.pubkey}" ] .enter_amount` ).value;
+			    		var dollars = await satsToDollars( sats );
+			    		var usdt_collateral = ( Number( dollars ) * ( content.collateral_for_loan / 100 ) ).toFixed( 2 );
+			    		var html = `Send precisely ${usdt_collateral} omni usdt to this bitcoin address: ${address}, then send precisely 2000 sats to pay for mining fees, then click Next`;
+			    		html += `<p><input class="txid" placeholder="txid of omni tx"></p>`;
+			    		html += `<p><input class="vout" placeholder="vout of omni tx"></p>`;
+			    		html += `<p><input class="sat_value" placeholder="sat_value of omni tx"></p>`;
+			    		html += `<p><input class="txhex" placeholder="txhex of omni tx"></p>`;
+			    		html += `<p><input class="txid_2" placeholder="txid of btc tx"></p>`;
+			    		html += `<p><input class="vout_2" placeholder="vout of btc tx"></p>`;
+			    		html += `<p><input class="txhex_2" placeholder="txhex of btc tx"></p>`;
+			    		html += `<p><button class="start_borrowing" data-pubkey=${event.pubkey}>Next</button></p>`;
+				    	var principle = Number( $( `div[ data-pubkey="${event.pubkey}" ] .enter_amount` ).value );
+			    		$( `div[ data-pubkey="${event.pubkey}" ] .fill_in_details` ).innerHTML = html;
+				    	$( `div[ data-pubkey="${event.pubkey}" ] .start_borrowing` ).onclick = async function() {
+				    		var txid = $( `div[ data-pubkey="${event.pubkey}" ] .txid` ).value;
+				    		var vout = Number( $( `div[ data-pubkey="${event.pubkey}" ] .vout` ).value );
+				    		var sat_value = Number( $( `div[ data-pubkey="${event.pubkey}" ] .sat_value` ).value );
+				    		var txhex = $( `div[ data-pubkey="${event.pubkey}" ] .txhex` ).value;
+				    		var txid_2 = $( `div[ data-pubkey="${event.pubkey}" ] .txid_2` ).value;
+				    		var vout_2 = Number( $( `div[ data-pubkey="${event.pubkey}" ] .vout_2` ).value );
+				    		var txhex_2 = $( `div[ data-pubkey="${event.pubkey}" ] .txhex_2` ).value;
+				    		var borrowerKeypair = myKeyPair;
+				    		var borrowerPubkey = borrowerKeypair.publicKey.toString( "hex" );
+				    		var lenderKeypair = bitcoinjs.ECPair.fromPublicKey( Buffer.from( content.btcpubkey, "hex" ) );
+				    		var lenderPubkey = lenderKeypair.publicKey.toString( "hex" );
+				    		var pmthash = content.payment_hash;
+				    		//var blockheight = await getBlockheight();
+				    		var blockheight = prompt( "Enter blockheight" );
+				    		blockheight = Number( blockheight );
+				    		var timelock = blockheight + 10;
+				    		console.log( "inputs to witness script: borrowerPubkey:", borrowerPubkey, "lenderPubkey:", lenderPubkey, "pmthash:", pmthash, "timelock:", timelock );
+				    		var witness_script = generateHtlcWithBorrowerTimelocked( borrowerPubkey, lenderPubkey, pmthash, timelock );
+				    		var htlc_hash160sha256 = bitcoinjs.crypto.hash160( buffer.Buffer.from( '0020' + bitcoinjs.crypto.sha256( witness_script ).toString( 'hex' ), 'hex' ) );
+				    		var p2wsh = bitcoinjs.payments.p2wsh({redeem: {output: witness_script, network: bitcoinjs.networks.testnet}, network: bitcoinjs.networks.testnet });
+				    		var p2sh = bitcoinjs.payments.p2sh({redeem: p2wsh, network: bitcoinjs.networks.testnet});
+				    		var htlc_address = p2sh.address;
+				    		console.log( "htlc address:", htlc_address );
+							var p2ms = make2of2MultisigOutputScript( borrowerPubkey, lenderPubkey );
+							var multisig_hash160sha256 = bitcoinjs.crypto.hash160( buffer.Buffer.from( '0020' + bitcoinjs.crypto.sha256( p2ms.output ).toString( 'hex' ), 'hex' ) );
+							var p2wsh = bitcoinjs.payments.p2wsh({redeem: p2ms, network: bitcoinjs.networks.testnet});
+							var p2sh = bitcoinjs.payments.p2sh({redeem: p2wsh, network: bitcoinjs.networks.testnet});
+							var multisig_address = p2sh.address;
+							console.log( "multisig:", multisig_address );
+							var privkey = myKeyPair.privateKey.toString( "hex" );
+							//var prev_tx_hex = await getData( `https://mempool.space/testnet/api/tx/${txid}/hex` );
+							console.log( "txhex:", txhex );
+							var prev_tx_hex = txhex;
+							var prev_tx_hex_2 = txhex_2;
+							var omni_payload = "6f6d6e690000000000000003" + decimalToHex( usdt_collateral );
+							var from_amount = sat_value;
+							//todo: get a fee estimate from mempool.space
+							var mining_fee = 500;
+
+							var sender = bitcoinjs.ECPair.fromPrivateKey(
+							  buffer.Buffer.from( privkey, 'hex' ),
+							  bitcoinjs.networks.testnet
+							);
+							var redeemscript = "0014" + bitcoinjs.crypto.ripemd160( bitcoinjs.crypto.sha256( sender.publicKey ) ).toString( 'hex' );
+							var psbt = new bitcoinjs.Psbt({
+							  network: bitcoinjs.networks.testnet,
+							});
+							var data = buffer.Buffer.from( omni_payload, 'hex' );
+							var embed = bitcoinjs.payments.embed({ data: [data] });
+							psbt.addInput({
+							  hash: txid,
+							  index: vout,
+							  nonWitnessUtxo: buffer.Buffer.from(
+							    prev_tx_hex,
+							    'hex',
+							  ),
+							  redeemScript: buffer.Buffer.from( redeemscript, "hex" ),
+							});
+							psbt.addInput({
+							  hash: txid_2,
+							  index: vout_2,
+							  nonWitnessUtxo: buffer.Buffer.from(
+							    prev_tx_hex_2,
+							    'hex',
+							  ),
+							  redeemScript: buffer.Buffer.from( redeemscript, "hex" ),
+							});
+							psbt.addOutput({
+							  script: embed.output,
+							  value: 0,
+							});
+							psbt.addOutput({
+							  address: htlc_address,
+							  value: ( from_amount + 2000 ) - mining_fee,
+							});
+
+							var unsigned_stage_1_funder_rawtx = psbt.data.globalMap.unsignedTx.tx.toHex()
+							var unsigned_stage_1_funder_txid = bitcoinjs.Transaction.fromHex( unsigned_stage_1_funder_rawtx ).getId();
+							console.log( "unsigned stage 1 funder, pre scriptsig:", unsigned_stage_1_funder_rawtx );
+							console.log( "unsigned stage 1 funder, pre scriptsig txid:", unsigned_stage_1_funder_txid );
+
+							var tx = unsigned_stage_1_funder_rawtx.split( "ffffffff" );
+							var scriptsig = '17160014' + bitcoinjs.crypto.hash160(sender.publicKey).toString('hex');
+							tx[ 0 ] = tx[ 0 ].slice( 0, -2 ) + scriptsig;
+							tx[ 1 ] = tx[ 1 ].slice( 0, -2 ) + scriptsig;
+							tx = tx.join( "ffffffff" );
+							var stage_1_funder_with_scriptsig_rawtx = tx;
+							console.log( "unsigned stage 1 funder with scriptsig:", stage_1_funder_with_scriptsig_rawtx );
+							var stage_1_funder_with_scriptsig_txid = bitcoinjs.Transaction.fromHex( stage_1_funder_with_scriptsig_rawtx ).getId();
+							console.log( "unsigned stage 1 funder with scriptsig txid:", stage_1_funder_with_scriptsig_txid );
+
+							psbt.signInput( 0, sender );
+							psbt.signInput( 1, sender );
+							psbt.finalizeInput( 0 );
+							psbt.finalizeInput( 1 );
+
+							//await waitSomeSeconds( 2 );
+
+							var stage_1_funder_signed_tx = psbt.extractTransaction().toHex();
+							var stage_1_funder_signed_txid = psbt.extractTransaction().getId();
+							console.log( "signed stage 1 funder:", stage_1_funder_signed_tx );
+							console.log( "signed stage 1 funder txid:", stage_1_funder_signed_txid );
+
+							//here I start preparing the stage 1 abort tx
+							var usdt_holder_address = "2MsTF8bHN88yUapJn3pMWn9aZU3LAJqcYBm";
+							var new_from_amount = ( from_amount + 2000 ) - mining_fee;
+							var mining_fee = 500;
+							var to_amount = new_from_amount - mining_fee;
+							var witness_script = generateHtlcWithBorrowerTimelocked( borrowerPubkey, lenderPubkey, pmthash, timelock );
+							var htlc_hash160sha256 = bitcoinjs.crypto.hash160( buffer.Buffer.from( '0020' + bitcoinjs.crypto.sha256( witness_script ).toString( 'hex' ), 'hex' ) );
+							var p2wsh = bitcoinjs.payments.p2wsh({redeem: {output: witness_script, network: bitcoinjs.networks.testnet}, network: bitcoinjs.networks.testnet });
+							var borrower_original_pubkey___not_the_same_as_his_htlc_pubkey = borrowerPubkey.toString( "hex" );
+							var ecPair = bitcoinjs.ECPair.fromPublicKey( buffer.Buffer.from( borrower_original_pubkey___not_the_same_as_his_htlc_pubkey, 'hex' ), bitcoinjs.networks.testnet );
+							var { output } = bitcoinjs.payments.p2sh({ redeem: bitcoinjs.payments.p2wpkh({ pubkey: ecPair.publicKey, network: bitcoinjs.networks.testnet }), network: bitcoinjs.networks.testnet});
+							var tx = unsigned_stage_1_funder_rawtx.split( "ffffffff" );
+							var scriptsig = '17160014' + bitcoinjs.crypto.hash160(sender.publicKey).toString('hex');
+							tx[ 0 ] = tx[ 0 ].slice( 0, -2 ) + scriptsig;
+							tx[ 1 ] = tx[ 1 ].slice( 0, -2 ) + scriptsig;
+							tx = tx.join( "ffffffff" );
+							var stage_1_funder_with_scriptsig_rawtx = tx;
+							console.log( "unsigned stage 1 funder with scriptsig (double-checking because now I'm preparing the abort tx and need the scriptsig to match what it was before):", stage_1_funder_with_scriptsig_rawtx );
+							var stage_1_funder_with_scriptsig_txid = bitcoinjs.Transaction.fromHex( stage_1_funder_with_scriptsig_rawtx ).getId();
+							console.log( "unsigned stage 1 funder with scriptsig txid:", stage_1_funder_with_scriptsig_txid );
+							var vout_for_abort_tx_and_stage_2_funder = 1;
+							var prev_tx_hex = stage_1_funder_with_scriptsig_rawtx;
+
+							var psbt = new bitcoinjs.Psbt({
+							  network: bitcoinjs.networks.testnet,
+							});
+							var data = buffer.Buffer.from( omni_payload, 'hex' );
+							var embed = bitcoinjs.payments.embed({ data: [data] });
+							psbt.addInput({
+							  hash: stage_1_funder_with_scriptsig_txid,
+							  index: vout_for_abort_tx_and_stage_2_funder,
+							  sequence: 0xfffffffe,
+							  redeemScript: buffer.Buffer.from('0020' + bitcoinjs.crypto.sha256(witness_script).toString('hex'), 'hex'),
+							  witnessScript: p2wsh.redeem.output,
+							  witnessUtxo: {
+							    script: buffer.Buffer.from('a914' + htlc_hash160sha256.toString('hex') + '87', 'hex'),
+							    value: new_from_amount,
+							  },
+							  nonWitnessUtxo: buffer.Buffer.from(
+							    prev_tx_hex,
+							    'hex',
+							  )
+							});
+							psbt.addOutput({
+							  script: embed.output,
+							  value: 0,
+							});
+							psbt.addOutput({
+							  address: usdt_holder_address,
+							  value: to_amount,
+							});
+							psbt.setLocktime( timelock );
+							var getFinalScripts = ( txindex, input, script ) => {
+							  // Step 1: Check to make sure the meaningful locking script matches what you expect.
+							  var decompiled = bitcoinjs.script.decompile( script )
+							  if ( !decompiled ) {
+							    throw new Error( `Can not finalize input #${txindex}` )
+							  }
+
+							  // Step 2: Create final scripts
+							  var witnessStack = bitcoinjs.payments.p2wsh({
+							    redeem: {
+							      output: script,
+							      input: bitcoinjs.script.compile([
+							        input.partialSig[0].signature,
+							        buffer.Buffer.from( "", 'hex' ),
+							      ]),
+							    }
+							  });
+							  return {
+							    finalScriptWitness: witnessStackToScriptWitness( witnessStack.witness ),
+							    finalScriptSig: buffer.Buffer.from('220020' + bitcoinjs.crypto.sha256(witness_script).toString('hex'), 'hex')
+							  }
+							}
+
+							var stage_1_abort_rawtx = psbt.data.globalMap.unsignedTx.tx.toHex();
+							var stage_1_abort_txid = psbt.data.globalMap.unsignedTx.tx.getId();
+							console.log( "unsigned aborter, no scriptsig:", stage_1_abort_rawtx );
+							console.log( "unsigned aborter, no scriptsig txid:", stage_1_abort_txid );
+							var aborter_slice_1 = stage_1_abort_rawtx.slice(0, 82)
+							var aborter_slice_2 = stage_1_abort_rawtx.slice(84)
+							var scriptsig = '23220020' + bitcoinjs.crypto.sha256(witness_script).toString('hex');
+							var aborter_with_scriptsig_rawtx = aborter_slice_1 + scriptsig + aborter_slice_2;
+							var aborter_with_scriptsig_txid = bitcoinjs.Transaction.fromHex( aborter_with_scriptsig_rawtx ).getId();
+							console.log( "unsigned aborter with scriptsig:", aborter_with_scriptsig_rawtx );
+							console.log( "unsigned aborter with scriptsig txid:", aborter_with_scriptsig_txid );
+							psbt.signInput( 0, borrowerKeypair );
+							psbt.finalizeInput( 0, getFinalScripts );
+							//await waitSomeSeconds( 2 );
+							var stage_1_abort_signed_tx = psbt.extractTransaction().toHex();
+							var stage_1_abort_signed_txid = psbt.extractTransaction().getId();
+							console.log( "signed aborter:", stage_1_abort_signed_tx );
+							console.log( "signed aborter txid:", stage_1_abort_signed_txid );
+							var aborter_psbt = psbt.toHex();
+							var signed_stage_1_funder_psbt = psbt.toHex();
+							//the following psbt is for the stage_2_funder
+							var psbt = new bitcoinjs.Psbt({
+							  network: bitcoinjs.networks.testnet,
+							});
+							var data = buffer.Buffer.from( omni_payload, 'hex' );
+							var embed = bitcoinjs.payments.embed({ data: [data] });
+							psbt.addInput({
+							  hash: stage_1_funder_with_scriptsig_txid,
+							  index: vout_for_abort_tx_and_stage_2_funder,
+							  sequence: 0xfffffffe,
+							  redeemScript: buffer.Buffer.from('0020' + bitcoinjs.crypto.sha256(witness_script).toString('hex'), 'hex'),
+							  witnessScript: p2wsh.redeem.output,
+							  witnessUtxo: {
+							    script: buffer.Buffer.from('a914' + htlc_hash160sha256.toString('hex') + '87', 'hex'),
+							    value: new_from_amount,
+							  },
+							  nonWitnessUtxo: buffer.Buffer.from(
+							    prev_tx_hex,
+							    'hex',
+							  )
+							});
+							psbt.addOutput({
+							  script: embed.output,
+							  value: 0,
+							});
+							psbt.addOutput({
+							  address: multisig_address,
+							  value: to_amount,
+							});
+							var getFinalScripts = ( txindex, input, script ) => {
+							  // Step 1: Check to make sure the meaningful locking script matches what you expect.
+							  var decompiled = bitcoinjs.script.decompile( script );
+							  if ( !decompiled ) {
+							    throw new Error( `Yeah I cannot finalize input #${txindex} bro` )
+							  }
+
+							  // Step 2: Create final scripts
+							  var witnessStack = bitcoinjs.payments.p2wsh({
+							    redeem: {
+							      output: script,
+							      input: bitcoinjs.script.compile([
+							        input.partialSig[0].signature,
+							        input.partialSig[1].signature,
+							        buffer.Buffer.from( preimage, 'hex' ),
+							      ]),
+							    }
+							  });
+							  return {
+							    finalScriptWitness: witnessStackToScriptWitness( witnessStack.witness ),
+							    finalScriptSig: buffer.Buffer.from('220020' + bitcoinjs.crypto.sha256(witness_script).toString('hex'), 'hex')
+							  }
+							}
+
+							var stage_2_funding_rawtx = psbt.data.globalMap.unsignedTx.tx.toHex();
+							var stage_2_funding_txid = psbt.data.globalMap.unsignedTx.tx.getId();
+							console.log( "unsigned stage 2 funder, no scriptsig:", stage_2_funding_rawtx );
+							console.log( "unsigned stage 2 funder, no scriptsig txid:", stage_2_funding_txid );
+
+							var stage_2_funder_slice_1 = stage_2_funding_rawtx.slice(0, 82);
+							var stage_2_funder_slice_2 = stage_2_funding_rawtx.slice(84);
+							var scriptsig = '23220020' + bitcoinjs.crypto.sha256(witness_script).toString('hex');
+							var stage_2_funder_with_scriptsig_rawtx = stage_2_funder_slice_1 + scriptsig + stage_2_funder_slice_2;
+							var stage_2_funder_with_scriptsig_txid = bitcoinjs.Transaction.fromHex( stage_2_funder_with_scriptsig_rawtx ).getId();
+							console.log( "unsigned stage 2 funder with scriptsig:", stage_2_funder_with_scriptsig_rawtx );
+							console.log( "unsigned stage 2 funder with scriptsig txid:", stage_2_funder_with_scriptsig_txid );
+
+							psbt.signInput( 0, borrowerKeypair );
+							var stage_2_funder_psbt_hex = psbt.toHex();
+							//the rest of this section should not actually be done yet
+							// psbt.signInput( 0, lenderKeypair );
+							// psbt.finalizeInput( 0, getFinalScripts );
+							// var stage_2_funder_signed_tx = psbt.extractTransaction().toHex();
+							// var stage_2_funder_signed_txid = psbt.extractTransaction().getId();
+							// console.log( "signed stage 2 funder:", stage_2_funder_signed_tx );
+							// console.log( "signed stage 2 funder txid:", stage_2_funder_signed_txid );
+							//return here
+					    	var note = {};
+					    	note[ "txid" ] = txid;
+					    	note[ "vout" ] = vout;
+					    	note[ "sat_value" ] = sat_value;
+					    	note[ "txhex" ] = txhex;
+					    	note[ "txid_2" ] = txid_2;
+					    	note[ "vout_2" ] = vout_2;
+					    	note[ "txhex_2" ] = txhex_2;
+					    	note[ "btcpubkey" ] = myBTCKey.toString( "hex" );
+					    	note[ "principle" ] = myBTCKey.toString( "hex" );
+					    	note[ "htlc_address" ] = htlc_address;
+					    	note[ "usdt_collateral" ] = usdt_collateral;
+					    	note[ "stage_1_funder_txid" ] = stage_1_funder_with_scriptsig_txid;
+					    	note[ "stage_2_funder_psbt" ] = stage_2_funder_psbt_hex;
+					    	note = JSON.stringify( note );
+					    	var encryptedNote = encrypt( privKey, event.pubkey, note );
+							var offerEvent = {
+								content: encryptedNote,
+								created_at: Math.floor(Date.now() / 1000),
+								kind: 10004,
+								tags: [["p", event.pubkey]],
+								pubkey: pubKey,
+							};
+
+							var signedOffer = await getSignedEvent(offerEvent, privKey);
+							socket.send(JSON.stringify(['EVENT', signedOffer]));
+				    	}
+			    	}
+		    	}
+			});
+			var timestamp = Math.floor(Date.now() / 1000);
+			var timeMinusTen = timestamp - 600;
+			var subId = bitcoinjs.ECPair.makeRandom().privateKey.toString( "hex" ).substring( 0, 20 );
+			var filter1 = { kinds: [10062], since: timeMinusTen };
+			var filter2 = { "#p": [pubKey] };
+			socket.addEventListener('open', async function (e) {
+				console.log('connected to ' + relay);
+				var subscription = ['REQ', subId, filter1, filter2];
+				socket.send(JSON.stringify(subscription));
+			});
+			async function getSignedEvent(event, privateKey) {
+				var eventData = JSON.stringify([
+					0, // Reserved for future use
+					event['pubkey'], // The sender's public key
+					event['created_at'], // Unix timestamp
+					event['kind'], // Message “kind” or type
+					event['tags'], // Tags identify replies/recipients
+					event['content'], // Your note contents
+				]);
+				event.id = sha256(eventData).toString('hex');
+				event.sig = await schnorr.sign(event.id, privateKey);
+				return event;
+			}
+			$( '.new_offer' ).onclick = function() {
+				if ( $( `div[ data-pubkey="${pubKey}" ]` ) ) {
+					var conf = confirm( `You already have an open offer and you can only have one per browser tab. Click ok to continue and replace your current offer with a new one.` );
+					if ( !conf ) return;
+				}
+				$( '.loan_offer' ).style.display = "block";
+				$( '.offer_wizard' ).style.display = "block";
+			}
+			$( '.lend' ).onclick = function() {
+				$( '.pick_borrow_or_lend' ).style.display = "none";
+				$( '.loan_offer' ).style.display = "block";
+			}
+			$( '.submit_loan_offer' ).onclick = async function() {
+				var offer_url = window.location.protocol + "//" + window.location.hostname + window.location.pathname + "?offer=" + pubKey;
+				$( '.offer_url' ).innerHTML = `Your offer: <a href="${offer_url}">${offer_url}</a>`;
+				$( '.offer_url' ).style.display = "block";
+				$( '.offer_wizard' ).style.display = "none";
+				if ( $( '.privacy_switch' ).checked ) return;
+			 	var offer = {}
+			 	offer[ "btcpubkey" ] = myBTCKey.toString( "hex" );
+			 	offer[ "min_to_lend" ] = Number( $( '.min_to_lend input' ).value );
+			 	offer[ "max_to_lend" ] = Number( $( '.max_to_lend input' ).value );
+			 	offer[ "fee_to_borrow" ] = Number( $( '.fee_to_borrow' ).value );
+			 	offer[ "collateral_for_loan" ] = Number( $( '.collateral_for_loan' ).value );
+			 	offer[ "duration_of_loan" ] = Number( $( '.duration_of_loan' ).value.split( " " )[ 0 ] );
+			 	offer[ "payment_hash" ] = pmthash_for_lender;
+				var offerEvent = {
+					content: JSON.stringify(offer),
+					created_at: Math.floor(Date.now() / 1000),
+					kind: 10062,
+					tags: [],
+					pubkey: pubKey,
+				};
+				var signedOffer = await getSignedEvent(offerEvent, privKey);
+				socket.send(JSON.stringify(['EVENT', signedOffer]));
+			}
+	    </script>
+    </body>
+</html>
