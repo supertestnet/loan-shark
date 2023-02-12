@@ -3,7 +3,7 @@ Fully collateralized bitcoin loans without custodians, escrows, or margin calls
 
 # This project is half baked, don't expect much yet
 
-Suppose Alice wants to loan Bob some bitcoins and get them back later with interest. She also wants to secure herself against Bob running away with the bitcoins by not issuing the loan unless Bob posts collateral that is double the current value of the loan. Alice and Bob can do this with a multisig bitcoin address and some omni usdt. Bob and Alice must exchange two signatures apiece, which will be explained in a moment, and when they do, Alice and Bob do an atomic swap: Alice sends $100 BTC to Bob and Bob puts $200 USDT into the multisig address.
+Suppose Alice wants to loan Bob some bitcoins and get them back later with interest. She also wants to secure herself against Bob running away with the bitcoins by means of collateral deposited into a contract by Bob, where the collateral is double the current value of the principle of the loan. Alice and Bob can do this with a multisig bitcoin address and some omni usdt. Bob and Alice must exchange two signatures apiece, which will be explained in a moment, and when they do, Alice and Bob do an atomic swap: Alice sends $100 BTC to Bob and Bob puts $200 USDT into the multisig address.
 
 The first pair of signatures Alice and Bob exchanged does this: they are only valid for a transaction that sends the money to one of Alice’s addresses after a timelock of 6 months. The second pair of signatures Alice and Bob exchanged is more complex: they use the sighash flag sighash_all | anyone_can_pay and they are only valid for a transaction that commits to the following outputs: $200 USDT goes to Bob and an amount of bitcoin currently worth $100 goes to Alice.
 
