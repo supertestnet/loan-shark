@@ -331,13 +331,13 @@
                             OP_ADD
                             OP_2
                             OP_EQUAL
-                          OP_ELSE
+                        OP_ELSE
                             ${ bitcoinjs.script.number.encode( timelock ).toString( "hex" ) }
                             OP_CHECKLOCKTIMEVERIFY
                             OP_DROP
                             ${ borrowerPubkey }
                             OP_CHECKSIG
-                          OP_ENDIF
+                        OP_ENDIF
                     `
                     .trim()
                     .replace( /\s+/g, " " ),
@@ -352,12 +352,12 @@
                         OP_EQUAL
                         OP_IF
                             ${ borrowerPubkey }
-                          OP_ELSE
+                        OP_ELSE
                             ${ bitcoinjs.script.number.encode( timelock ).toString( "hex" ) }
                             OP_CHECKLOCKTIMEVERIFY
                             OP_DROP
                             ${ lenderPubkey }
-                          OP_ENDIF
+                        OP_ENDIF
                         OP_CHECKSIG
                     `
                     .trim()
@@ -1286,13 +1286,14 @@
                     content = JSON.parse( content );
                     if ( content.msg_type == "deal" ) {
                     	console.log( "deal content:", content );
-                        console.log( `STEP FIVE sweep the btc from this second htlc: ${htlc_address} with the preimage from step four` );
+                    	//todo: validate that the amount they ask you to pay back
+                    	//is less than or equal to the agreed upon amount
 	                    //wait for money to enter the stage 0 address
 	                    var htlc_address = sessionStorage[ "stage_0_swap_address" ];
 	                    var principle = sessionStorage[ "princple" ];
 	                    principle = Number( principle );
+	                    var conf = alert( `Click ok when this address: ${htlc_address} has this many sats: ${principle} (it should have gotten them in step two)` );
 	                    //await waitForMoneyToArriveInAddress( htlc_address );
-	                    var conf = confirm( `Click ok when this address: ${htlc_address} has this many sats: ${principle} (it should have gotten them in step two)` );
 	                    //get the txid and vout of the deposit
 	                    // var txid = await addressGotMoneyInThisTx(htlc_address);
 						// var info = await getData( "https://mempool.space/api/tx/" + txid );
@@ -1305,81 +1306,112 @@
 						//     }
 						//     return true;
 						// });
-						var txid = prompt( "Enter the txid that deposited the principle" );
-						var vout = prompt( "Enter the vout" );
+						var txid = prompt( "Enter the txid that deposited the principle in step two" );
+						var vout = prompt( "Enter the vout from step two" );
 						vout = Number( vout );
-						var prev_tx_hex = prompt( "Enter the txhex" );
-						var preimage = prompt( "Enter the preimage from step four" );
-						var receive_address = await getFirstUnusedChangeAddress();
-						var witness_script = Buffer.from( sessionStorage[ "witness_script" ], "hex" );
-						var htlc_hash160sha256 = Buffer.from( sessionStorage[ "htlc_hash160sha256" ], "hex" );
-						var p2wsh_output = Buffer.from( sessionStorage[ "p2wsh_output" ], "hex" );
-	                    var psbt = new bitcoinjs.Psbt({
-	                      network: bitcoinjs.networks.testnet,
-	                    });
-	                    psbt.addInput({
-	                      hash: txid,
-	                      index: vout,
-	                      sequence: 0xfffffffd,
-	                      redeemScript: Buffer.from('0020' + bitcoinjs.crypto.sha256(witness_script).toString('hex'), 'hex'),
-	                      witnessScript: p2wsh_output,
-	                      witnessUtxo: {
-	                        script: Buffer.from('a914' + htlc_hash160sha256.toString('hex') + '87', 'hex'),
-	                        value: principle,
-	                      },
-	                      nonWitnessUtxo: Buffer.from(
-	                        prev_tx_hex,
-	                        'hex',
-	                      )
-	                    });
-	                    psbt.addOutput({
-	                      address: receive_address,
-	                      value: principle - 500,
-	                    });
-	                    var getFinalScripts = ( txindex, input, script ) => {
-	                      // Step 1: Check to make sure the meaningful locking script matches what you expect.
-	                      var decompiled = bitcoinjs.script.decompile( script )
-	                      if ( !decompiled ) {
-	                        throw new Error( `Can not finalize input #${txindex}` )
-	                      }
+						var prev_tx_hex = prompt( "Enter the txhex from step two" );
+                        alert( "STEP THREE click ok after you broadcast this signed stage 1 funder: " + sessionStorage[ "stage_1_funder_signed_tx" ] );
+                        var conf = confirm( "Click ok when the lender completes step 4 (by sending the money from the stage 1 funder to the multisig), otherwise click cancel after 10 blocks pass by" );
+                        if ( !conf ) {
+                        	//take your collateral back
+                        	alert( `Ten blocks passed so take back your collateral by broadcasting this transaction: ${sessionStorage[ "signed_aborter" ]}` );
+                        }
+                        if ( conf ) {
+							var preimage = prompt( "Wait til the lender completes step four (by sending the money from the stage 1 funder to the multisig), then enter the preimage they used to do that" );
+							var receive_address = await getFirstUnusedChangeAddress();
+							var receive_address_privkey = await getPrivateKeyOfFirstUnusedChangeAddress();
+							var receive_address_pubkey = getCompressedPubkeyHexFromPrivkeyHex( receive_address_privkey );
+							var witness_script = Buffer.from( sessionStorage[ "witness_script" ], "hex" );
+							var htlc_hash160sha256 = Buffer.from( sessionStorage[ "htlc_hash160sha256" ], "hex" );
+							var p2wsh_output = Buffer.from( sessionStorage[ "p2wsh_output" ], "hex" );
+		                    var psbt = new bitcoinjs.Psbt({
+		                      network: bitcoinjs.networks.testnet,
+		                    });
+		                    psbt.addInput({
+		                      hash: txid,
+		                      index: vout,
+		                      sequence: 0xfffffffd,
+		                      redeemScript: Buffer.from('0020' + bitcoinjs.crypto.sha256(witness_script).toString('hex'), 'hex'),
+		                      witnessScript: p2wsh_output,
+		                      witnessUtxo: {
+		                        script: Buffer.from('a914' + htlc_hash160sha256.toString('hex') + '87', 'hex'),
+		                        value: principle,
+		                      },
+		                      nonWitnessUtxo: Buffer.from(
+		                        prev_tx_hex,
+		                        'hex',
+		                      )
+		                    });
+		                    psbt.addOutput({
+		                      address: receive_address,
+		                      value: principle - 500,
+		                    });
+		                    var getFinalScripts = ( txindex, input, script ) => {
+		                      // Step 1: Check to make sure the meaningful locking script matches what you expect.
+		                      var decompiled = bitcoinjs.script.decompile( script )
+		                      if ( !decompiled ) {
+		                        throw new Error( `Can not finalize input #${txindex}` )
+		                      }
 
-	                      // Step 2: Create final scripts
-	                      var witnessStack = bitcoinjs.payments.p2wsh({
-	                        redeem: {
-	                          output: script,
-	                          input: bitcoinjs.script.compile([
-	                            input.partialSig[0].signature,
-	                            Buffer.from( preimage, 'hex' ),
-	                          ]),
-	                        }
-	                      });
-	                      return {
-	                        finalScriptWitness: witnessStackToScriptWitness( witnessStack.witness ),
-	                        finalScriptSig: Buffer.from('220020' + bitcoinjs.crypto.sha256(witness_script).toString('hex'), 'hex')
-	                      }
-	                    }
+		                      // Step 2: Create final scripts
+		                      var witnessStack = bitcoinjs.payments.p2wsh({
+		                        redeem: {
+		                          output: script,
+		                          input: bitcoinjs.script.compile([
+		                            input.partialSig[0].signature,
+		                            Buffer.from( preimage, 'hex' ),
+		                          ]),
+		                        }
+		                      });
+		                      return {
+		                        finalScriptWitness: witnessStackToScriptWitness( witnessStack.witness ),
+		                        finalScriptSig: Buffer.from('220020' + bitcoinjs.crypto.sha256(witness_script).toString('hex'), 'hex')
+		                      }
+		                    }
 
-	                    var sweep_loan_rawtx = psbt.data.globalMap.unsignedTx.tx.toHex();
-	                    var sweep_loan_txid = psbt.data.globalMap.unsignedTx.tx.getId();
-	                    console.log( "unsigned sweep loan tx, no scriptsig:", sweep_loan_rawtx );
-	                    console.log( "unsigned sweep loan tx, no scriptsig txid:", sweep_loan_txid );
+		                    var sweep_loan_rawtx = psbt.data.globalMap.unsignedTx.tx.toHex();
+		                    var sweep_loan_txid = psbt.data.globalMap.unsignedTx.tx.getId();
+		                    console.log( "unsigned sweep loan tx, no scriptsig:", sweep_loan_rawtx );
+		                    console.log( "unsigned sweep loan tx, no scriptsig txid:", sweep_loan_txid );
 
-	                    var sweep_loan_slice_1 = sweep_loan_rawtx.slice(0, 82)
-	                    var sweep_loan_slice_2 = sweep_loan_rawtx.slice(84)
-	                    var scriptsig = '23220020' + bitcoinjs.crypto.sha256(witness_script).toString('hex');
-	                    var sweep_loan_with_scriptsig_rawtx = sweep_loan_slice_1 + scriptsig + sweep_loan_slice_2;
-	                    var sweep_loan_with_scriptsig_txid = bitcoinjs.Transaction.fromHex( sweep_loan_with_scriptsig_rawtx ).getId();
-	                    console.log( "unsigned sweep loan tx with scriptsig:", sweep_loan_with_scriptsig_rawtx );
-	                    console.log( "unsigned sweep loan tx with scriptsig txid:", sweep_loan_with_scriptsig_txid );
+		                    var sweep_loan_slice_1 = sweep_loan_rawtx.slice(0, 82);
+		                    var sweep_loan_slice_2 = sweep_loan_rawtx.slice(84);
+		                    var scriptsig = '23220020' + bitcoinjs.crypto.sha256(witness_script).toString('hex');
+		                    var sweep_loan_with_scriptsig_rawtx = sweep_loan_slice_1 + scriptsig + sweep_loan_slice_2;
+		                    var sweep_loan_with_scriptsig_txid = bitcoinjs.Transaction.fromHex( sweep_loan_with_scriptsig_rawtx ).getId();
+		                    console.log( "unsigned sweep loan tx with scriptsig:", sweep_loan_with_scriptsig_rawtx );
+		                    console.log( "unsigned sweep loan tx with scriptsig txid:", sweep_loan_with_scriptsig_txid );
 
-	                    psbt.signInput( 0, myKeyPair );
-	                    console.log( "sweep_loan_fully_signed_psbt:", psbt.toHex() );
-	                    //validate the signature
-	                    psbt.validateSignaturesOfInput( 0 );
-	                    psbt.finalizeInput( 0, getFinalScripts );
-	                    console.log( "sweep_loan_fully_signed_tx:", psbt.extractTransaction().toHex() );
-                        console.log( "STEP SIX: broadcast the above tx" );
-                        console.log( "STEP SEVEN HAPPY PATH: pay off your debt" );
+		                    psbt.signInput( 0, myKeyPair );
+		                    console.log( "sweep_loan_fully_signed_psbt:", psbt.toHex() );
+		                    //validate the signature
+		                    psbt.validateSignaturesOfInput( 0 );
+		                    psbt.finalizeInput( 0, getFinalScripts );
+	                        alert( `STEP FIVE sweep the btc from this second htlc: ${htlc_address} by broadcasting this tx: ${psbt.extractTransaction().toHex()}` );
+				            var btc_utxo = {
+				                "prev_tx_hex":psbt.extractTransaction().toHex(),
+				                "output_number":0,
+				                "amount":principle,
+				                "tx_id":psbt.extractTransaction().getId(),
+				                "privkey":receive_address_privkey,
+				                "pubkey":receive_address_pubkey
+				            }
+			                var utxos = JSON.parse( localStorage[ "utxos" ] );
+			                utxos.push( btc_utxo );
+			                localStorage = JSON.stringify( utxos );
+			                var balance = 0;
+			                utxos.forEach( function( utxo ) {
+			                    balance = balance + utxo[ "amount" ];
+			                });
+			                var display_balance = balance;
+			                var suffix = " sats";
+			                if ( String( display_balance ).length > 5 ) {
+			                    display_balance = satsToBitcoin( display_balance );
+			                    suffix = " btc";
+			                }
+			                $( '.btc_balance' ).innerText = display_balance + suffix;
+	                        console.log( `STEP SIX HAPPY PATH: pay off your debt -- you currently owe ${bitcoinjs.Psbt.fromHex( content[ "signed_payout_psbt" ] )[ "data" ][ "outputs" ][ 1 ][ "value" ]} sats and you currently have ${$( '.btc_balance' ).innerText}` );
+                        }
                     } else {
 	                    var borrowerKeypair = bitcoinjs.ECPair.fromPublicKey( Buffer.from( content.btcpubkey, "hex" ) );
 	                    var borrowerPubkey = borrowerKeypair.publicKey.toString( "hex" );
@@ -1597,14 +1629,37 @@
 	                        finalScriptSig: Buffer.from('220020' + bitcoinjs.crypto.sha256(witness_script).toString('hex'), 'hex')
 	                      }
 	                    }
+	                    var getFinalScripts_alt = ( txindex, input, script ) => {
+	                      // Step 1: Check to make sure the meaningful locking script matches what you expect.
+	                      var decompiled = bitcoinjs.script.decompile( script )
+	                      if ( !decompiled ) {
+	                        throw new Error( `Can not finalize input #${txindex}` )
+	                      }
+
+	                      // Step 2: Create final scripts
+	                      var witnessStack = bitcoinjs.payments.p2wsh({
+	                        redeem: {
+	                          output: script,
+	                          input: bitcoinjs.script.compile([
+	                            input.partialSig[1].signature,
+	                            input.partialSig[0].signature,
+	                            Buffer.from( preimage_for_lender, 'hex' ),
+	                          ]),
+	                        }
+	                      });
+	                      return {
+	                        finalScriptWitness: witnessStackToScriptWitness( witnessStack.witness ),
+	                        finalScriptSig: Buffer.from('220020' + bitcoinjs.crypto.sha256(witness_script).toString('hex'), 'hex')
+	                      }
+	                    }
 
 	                    var stage_2_funding_rawtx = psbt.data.globalMap.unsignedTx.tx.toHex();
 	                    var stage_2_funding_txid = psbt.data.globalMap.unsignedTx.tx.getId();
 	                    console.log( "unsigned stage 2 funder, no scriptsig:", stage_2_funding_rawtx );
 	                    console.log( "unsigned stage 2 funder, no scriptsig txid:", stage_2_funding_txid );
 
-	                    var stage_2_funder_slice_1 = stage_2_funding_rawtx.slice(0, 82)
-	                    var stage_2_funder_slice_2 = stage_2_funding_rawtx.slice(84)
+	                    var stage_2_funder_slice_1 = stage_2_funding_rawtx.slice(0, 82);
+	                    var stage_2_funder_slice_2 = stage_2_funding_rawtx.slice(84);
 	                    var scriptsig = '23220020' + bitcoinjs.crypto.sha256(witness_script).toString('hex');
 	                    var stage_2_funder_with_scriptsig_rawtx = stage_2_funder_slice_1 + scriptsig + stage_2_funder_slice_2;
 	                    var stage_2_funder_with_scriptsig_txid = bitcoinjs.Transaction.fromHex( stage_2_funder_with_scriptsig_rawtx ).getId();
@@ -1616,8 +1671,8 @@
 	                    var claimed_stage_2_psbt_txid = claimed_stage_2_psbt.data.globalMap.unsignedTx.tx.getId();
 	                    if ( claimed_stage_2_psbt_txid != stage_2_funder_with_scriptsig_txid ) {
 	                        claimed_txhex = claimed_stage_2_psbt.data.globalMap.unsignedTx.tx.toHex();
-	                        var claimed_stage_2_funder_slice_1 = claimed_txhex.slice(0, 82)
-	                        var claimed_stage_2_funder_slice_2 = claimed_txhex.slice(84)
+	                        var claimed_stage_2_funder_slice_1 = claimed_txhex.slice(0, 82);
+	                        var claimed_stage_2_funder_slice_2 = claimed_txhex.slice(84);
 	                        var scriptsig = '23220020' + bitcoinjs.crypto.sha256(witness_script).toString('hex');
 	                        var claimed_scriptsig_rawtx = claimed_stage_2_funder_slice_1 + scriptsig + claimed_stage_2_funder_slice_2;
 	                        var claimed_scriptsig_txid = bitcoinjs.Transaction.fromHex( claimed_scriptsig_rawtx ).getId();
@@ -1635,14 +1690,21 @@
 	                    console.log( "stage_2_funder_fully_signed_psbt:", claimed_stage_2_psbt.toHex() );
 	                    //validate the borrower's signature
 	                    claimed_stage_2_psbt.validateSignaturesOfInput( 0 );
+	                    stage_2_funder_psbt_hex = claimed_stage_2_psbt.toHex();
 	                    claimed_stage_2_psbt.finalizeInput( 0, getFinalScripts );
-	                    console.log( "STEP FOUR broadcast this stage_2_funder_fully_signed_tx:", claimed_stage_2_psbt.extractTransaction().toHex() );
+	                    var alt_psbt = bitcoinjs.Psbt.fromHex( stage_2_funder_psbt_hex );
+	                    alt_psbt.finalizeInput( 0, getFinalScripts_alt );
+	                    sessionStorage[ "stage_2_funder_fully_signed_tx" ] = claimed_stage_2_psbt.extractTransaction().toHex();
+	                    sessionStorage[ "stage_2_funder_fully_signed_tx_alt" ] = alt_psbt.extractTransaction().toHex();
+	                    console.log( "stage_2_funder_fully_signed_tx:", claimed_stage_2_psbt.extractTransaction().toHex() );
+	                    console.log( "And alternate:", alt_psbt.extractTransaction().toHex() );
 	                    //todo: also make a version with the sigs reversed so you can broadcast that one if the first one fails
 	                    //initialize the penalty transaction
 	                    var p2ms = make2of2MultisigOutputScript( borrowerPubkey, lenderPubkey );
 	                    var multisig_hash160sha256 = bitcoinjs.crypto.hash160( Buffer.from( '0020' + bitcoinjs.crypto.sha256( p2ms.output ).toString( 'hex' ), 'hex' ) );
 	                    var p2wsh = bitcoinjs.payments.p2wsh({redeem: p2ms, network: bitcoinjs.networks.testnet});
 	                    var p2wsh_for_multisig = p2wsh;
+	                    //todo: set the right timelock
 	                    var timelock_for_penalty = blockheight + 25920;
 	                    var vout_for_penalty = 1;
 	                    //var prev_tx_hex = await getData( `https://mempool.space/testnet/api/tx/${txid}/hex` );
@@ -1683,8 +1745,8 @@
 	                    console.log( "unsigned stage 3 penalty, pre scriptsig:", unsigned_stage_3_penalty_rawtx );
 	                    console.log( "unsigned stage 3 penalty, pre scriptsig txid:", unsigned_stage_3_penalty_rawtx );
 
-	                    var penalty_slice_1 = unsigned_stage_3_penalty_rawtx.slice(0, 82)
-	                    var penalty_slice_2 = unsigned_stage_3_penalty_rawtx.slice(84)
+	                    var penalty_slice_1 = unsigned_stage_3_penalty_rawtx.slice(0, 82);
+	                    var penalty_slice_2 = unsigned_stage_3_penalty_rawtx.slice(84);
 	                    //var scriptsig = '17160014' + bitcoinjs.crypto.hash160(p2ms.output).toString('hex');
 	                    var scriptsig = '23220020' + bitcoinjs.crypto.sha256(p2ms.output).toString('hex');
 	                    var penalty_with_scriptsig_rawtx = penalty_slice_1 + scriptsig + penalty_slice_2;
@@ -1697,8 +1759,8 @@
 	                    var claimed_penalty_psbt_txid = claimed_penalty_psbt.data.globalMap.unsignedTx.tx.getId();
 	                    if ( claimed_penalty_psbt_txid != penalty_with_scriptsig_txid ) {
 	                        claimed_txhex = claimed_penalty_psbt.data.globalMap.unsignedTx.tx.toHex();
-	                        var claimed_penalty_slice_1 = claimed_txhex.slice(0, 82)
-	                        var claimed_penalty_slice_2 = claimed_txhex.slice(84)
+	                        var claimed_penalty_slice_1 = claimed_txhex.slice(0, 82);
+	                        var claimed_penalty_slice_2 = claimed_txhex.slice(84);
 	                        var scriptsig = '23220020' + bitcoinjs.crypto.sha256(p2ms.output).toString('hex');
 	                        var claimed_scriptsig_rawtx = claimed_penalty_slice_1 + scriptsig + claimed_penalty_slice_2;
 	                        var claimed_scriptsig_txid = bitcoinjs.Transaction.fromHex( claimed_scriptsig_rawtx ).getId();
@@ -1769,8 +1831,8 @@
 	                    console.log( "unsigned payout, pre scriptsig:", unsigned_payout_rawtx );
 	                    console.log( "unsigned payout, pre scriptsig txid:", unsigned_payout_txid );
 
-	                    var payout_slice_1 = unsigned_payout_rawtx.slice(0, 82)
-	                    var payout_slice_2 = unsigned_payout_rawtx.slice(84)
+	                    var payout_slice_1 = unsigned_payout_rawtx.slice(0, 82);
+	                    var payout_slice_2 = unsigned_payout_rawtx.slice(84);
 	                    //var scriptsig = '17160014' + bitcoinjs.crypto.hash160(p2ms.output).toString('hex');
 	                    var scriptsig = '23220020' + bitcoinjs.crypto.sha256(p2ms.output).toString('hex');
 	                    var payout_with_scriptsig_rawtx = payout_slice_1 + scriptsig + payout_slice_2;
@@ -1783,8 +1845,8 @@
 	                    var claimed_payout_psbt_txid = claimed_payout_psbt.data.globalMap.unsignedTx.tx.getId();
 	                    if ( claimed_payout_psbt_txid != payout_with_scriptsig_txid ) {
 	                        claimed_txhex = claimed_payout_psbt.data.globalMap.unsignedTx.tx.toHex();
-	                        var claimed_payout_slice_1 = claimed_txhex.slice(0, 82)
-	                        var claimed_payout_slice_2 = claimed_txhex.slice(84)
+	                        var claimed_payout_slice_1 = claimed_txhex.slice(0, 82);
+	                        var claimed_payout_slice_2 = claimed_txhex.slice(84);
 	                        var scriptsig = '23220020' + bitcoinjs.crypto.sha256(p2ms.output).toString('hex');
 	                        var claimed_scriptsig_rawtx = claimed_payout_slice_1 + scriptsig + claimed_payout_slice_2;
 	                        var claimed_scriptsig_txid = bitcoinjs.Transaction.fromHex( claimed_scriptsig_rawtx ).getId();
@@ -1812,7 +1874,8 @@
 	                    var htlc_hash160sha256 = bitcoinjs.crypto.hash160( Buffer.from( '0020' + bitcoinjs.crypto.sha256( witness_script ).toString( 'hex' ), 'hex' ) );
 	                    var p2wsh = bitcoinjs.payments.p2wsh({redeem: {output: witness_script, network: bitcoinjs.networks.testnet}, network: bitcoinjs.networks.testnet });
 	                    var p2sh = bitcoinjs.payments.p2sh({redeem: p2wsh, network: bitcoinjs.networks.testnet});
-	                    var htlc_address = p2sh.address;
+	                    var first_htlc_address_with_borrower_timelocked = htlc_address;
+	                    htlc_address = p2sh.address;
 	                    console.log( "htlc address with lender timelocked:", htlc_address );
 	                    var feerate = await getMinFeeRate();
 	                    //todo: stop using an intermediary address
@@ -1822,7 +1885,7 @@
 	                    var array = await simpleSend( content.principle + (feerate * 200 * 2), intermediary_address, feerate, true, true, true, true );
 	                    var txid = array[ 0 ];
 	                    var txhex = array[ 1 ];
-	                    console.log( "STEP ONE broadcast this deposit into the lender's intermediary address:", txhex );
+	                    alert( "STEP ONE click ok when you broadcast this deposit into your (the lender's) intermediary address: " + txhex );
 	                    var vout = 0;
 	                    //var inputs_for_deposit = addUtxosToTx( content.principle + 500, JSON.parse( localStorage[ "utxos" ] ), [], feerate );
 	                    //initialize deposit into htlc
@@ -1858,9 +1921,8 @@
 	                    psbt.finalizeInput( 0 );
 	                    //await waitSomeSeconds( 2 );
 	                    var signed_deposit_tx = psbt.extractTransaction().toHex();
-	                    console.log( "STEP TWO broadcast this signed deposit into the second htlc:", signed_deposit_tx );
+	                    alert( "STEP TWO click ok when you broadcast this signed deposit into the second htlc: " + signed_deposit_tx );
 	                    console.log( "signed deposit txid:", psbt.extractTransaction().getId() );
-	                    //return here -- lender
 	                    var note = {};
 	                    note[ "msg_type" ] = "deal";
 	                    note[ "signed_penalty_psbt" ] = claimed_penalty_psbt.toHex();
@@ -1876,7 +1938,78 @@
 	                    };
 	                    var signedOffer = await getSignedEvent(offerEvent, privKey);
 	                    socket.send(JSON.stringify(['EVENT', signedOffer]));
-                        console.log( "STEP SEVEN UNHAPPY PATH: sweep the collateral" );
+	                    var receive_address = await getFirstUnusedReceiveAddress();
+                        var htlc_hash160sha256 = bitcoinjs.crypto.hash160( Buffer.from( '0020' + bitcoinjs.crypto.sha256( witness_script ).toString( 'hex' ), 'hex' ) );
+                        var psbt = new bitcoinjs.Psbt({
+                          network: bitcoinjs.networks.testnet,
+                        });
+                        psbt.addInput({
+                          hash: deposit_with_scriptsig_txid,
+                          index: 0,
+                          sequence: 0xfffffffd,
+                          redeemScript: Buffer.from('0020' + bitcoinjs.crypto.sha256(witness_script).toString('hex'), 'hex'),
+                          witnessScript: witness_script,
+                          witnessUtxo: {
+                            script: Buffer.from('a914' + htlc_hash160sha256.toString('hex') + '87', 'hex'),
+                            value: content.principle,
+                          },
+                          nonWitnessUtxo: Buffer.from(
+                            signed_deposit_tx,
+                            'hex',
+                          )
+                        });
+                        psbt.addOutput({
+                          address: receive_address,
+                          value: content.principle - 500,
+                        });
+                        psbt.setLocktime( timelock );
+                        var getFinalScripts = ( txindex, input, script ) => {
+                          // Step 1: Check to make sure the meaningful locking script matches what you expect.
+                          var decompiled = bitcoinjs.script.decompile( script )
+                          if ( !decompiled ) {
+                            throw new Error( `Can not finalize input #${txindex}` )
+                          }
+
+                          // Step 2: Create final scripts
+                          var witnessStack = bitcoinjs.payments.p2wsh({
+                            redeem: {
+                              output: script,
+                              input: bitcoinjs.script.compile([
+                                input.partialSig[0].signature,
+                                Buffer.from( "", 'hex' ),
+                              ]),
+                            }
+                          });
+                          return {
+                            finalScriptWitness: witnessStackToScriptWitness( witnessStack.witness ),
+                            finalScriptSig: Buffer.from('220020' + bitcoinjs.crypto.sha256(witness_script).toString('hex'), 'hex')
+                          }
+                        }
+
+                        var lender_abort_rawtx = psbt.data.globalMap.unsignedTx.tx.toHex();
+                        var lender_abort_txid = psbt.data.globalMap.unsignedTx.tx.getId();
+                        console.log( "unsigned lender abort, no scriptsig:", lender_abort_rawtx );
+                        console.log( "unsigned lender abort, no scriptsig txid:", lender_abort_txid );
+                        var aborter_slice_1 = lender_abort_rawtx.slice(0, 82);
+                        var aborter_slice_2 = lender_abort_rawtx.slice(84);
+                        var scriptsig = '23220020' + bitcoinjs.crypto.sha256(witness_script).toString('hex');
+                        var lender_abort_with_scriptsig_rawtx = aborter_slice_1 + scriptsig + aborter_slice_2;
+                        var lender_abort_with_scriptsig_txid = bitcoinjs.Transaction.fromHex( lender_abort_with_scriptsig_rawtx ).getId();
+                        console.log( "unsigned lender abort with scriptsig:", lender_abort_with_scriptsig_rawtx );
+                        console.log( "unsigned lender abort with scriptsig txid:", lender_abort_with_scriptsig_txid );
+                        psbt.signInput( 0, lenderKeypair );
+                        psbt.finalizeInput( 0, getFinalScripts );
+                        //await waitSomeSeconds( 2 );
+                        var lender_abort_signed_tx = psbt.extractTransaction().toHex();
+                        var conf = confirm( "Click ok when the borrower completes step three (by sending the collateral into the stage 1 funder), otherwise click cancel after 20 blocks pass by" );
+                        if ( !conf ) {
+                        	//take your collateral back
+                        	alert( `Twenty blocks passed so take back your collateral by broadcasting this transaction: ${lender_abort_signed_tx}` );
+                        }
+                        if ( conf ) {
+		                    alert( `STEP FOUR wait a block, ensure the swap address (${first_htlc_address_with_borrower_timelocked}) has the collateral (${usdt_collateral}), then broadcast this stage_2_funder_fully_signed_tx (and thus reveal the preimage your counterparty needs to sweep the principle of the loan): ${sessionStorage[ "stage_2_funder_fully_signed_tx" ]} -- or, if that one doesn't work, this one: ${sessionStorage[ "stage_2_funder_fully_signed_tx_alt" ]} -- then click ok` );
+	                        alert( "STEP SIX UNHAPPY PATH: if you aren't paid back before the timelock expires, sweep the collateral with this transaction: " + claimed_penalty_psbt.extractTransaction().toHex() );
+	                    }
 	                }
                 }
                 if ( event.kind != 10062 ) return;
@@ -1911,12 +2044,6 @@
                             <input type="number" step="1" class="enter_amount">
                         </p>
                         <p>
-                            Enter a bitcoin address where you want to receive the money
-                        </p>
-                        <p>
-                            <input class="enter_address">
-                        </p>
-                        <p>
                             <button class="finalize_acceptance">Submit</button>
                         </p>
                     </div>
@@ -1937,7 +2064,6 @@
                     $( `div[ data-pubkey="${event.pubkey}" ] .enter_amount` ).max = maxval;
                     $( `div[ data-pubkey="${event.pubkey}" ] .enter_amount` ).min = minval;
                     $( `div[ data-pubkey="${event.pubkey}" ] .finalize_acceptance` ).onclick = async function() {
-                        var borrowerAddress = $( `div[ data-pubkey="${event.pubkey}" ] .enter_address` ).value;
                         var sats = $( `div[ data-pubkey="${event.pubkey}" ] .enter_amount` ).value;
                         var dollars = await satsToDollars( sats );
                         var usdt_collateral = ( Number( dollars ) * ( content.collateral_for_loan / 100 ) ).toFixed( 2 );
@@ -1988,7 +2114,7 @@
                         console.log( "multisig:", multisig_address );
                         var privkey = myKeyPair.privateKey.toString( "hex" );
                         //var prev_tx_hex = await getData( `https://mempool.space/testnet/api/tx/${txid}/hex` );
-                        console.log( "STEP ZERO broacast this txhex of deposit into the borrower's intermediary address:", txhex );
+                        alert( "STEP ZERO click ok when you broacast this txhex of deposit into the borrower's intermediary address: " + txhex );
                         var prev_tx_hex = txhex;
                         var prev_tx_hex_2 = txhex_2;
                         var omni_payload = "6f6d6e690000000000000003" + decimalToHex( usdt_collateral );
@@ -2057,11 +2183,11 @@
 
                         var stage_1_funder_signed_tx = psbt.extractTransaction().toHex();
                         var stage_1_funder_signed_txid = psbt.extractTransaction().getId();
-                        console.log( "STEP THREE broadcast this signed stage 1 funder:", stage_1_funder_signed_tx );
+                        console.log( "signed stage 1 funder:", stage_1_funder_signed_tx );
+                        sessionStorage[ "stage_1_funder_signed_tx" ] = stage_1_funder_signed_tx;
                         console.log( "signed stage 1 funder txid:", stage_1_funder_signed_txid );
 
                         //here I start preparing the stage 1 abort tx
-                        var usdt_holder_address = "2MsTF8bHN88yUapJn3pMWn9aZU3LAJqcYBm";
                         var new_from_amount = ( from_amount + 2000 ) - mining_fee;
                         var mining_fee = 500;
                         var to_amount = new_from_amount - mining_fee;
@@ -2108,7 +2234,7 @@
                           value: 0,
                         });
                         psbt.addOutput({
-                          address: usdt_holder_address,
+                          address: usdt_address,
                           value: to_amount,
                         });
                         psbt.setLocktime( timelock );
@@ -2139,8 +2265,8 @@
                         var stage_1_abort_txid = psbt.data.globalMap.unsignedTx.tx.getId();
                         console.log( "unsigned aborter, no scriptsig:", stage_1_abort_rawtx );
                         console.log( "unsigned aborter, no scriptsig txid:", stage_1_abort_txid );
-                        var aborter_slice_1 = stage_1_abort_rawtx.slice(0, 82)
-                        var aborter_slice_2 = stage_1_abort_rawtx.slice(84)
+                        var aborter_slice_1 = stage_1_abort_rawtx.slice(0, 82);
+                        var aborter_slice_2 = stage_1_abort_rawtx.slice(84);
                         var scriptsig = '23220020' + bitcoinjs.crypto.sha256(witness_script).toString('hex');
                         var aborter_with_scriptsig_rawtx = aborter_slice_1 + scriptsig + aborter_slice_2;
                         var aborter_with_scriptsig_txid = bitcoinjs.Transaction.fromHex( aborter_with_scriptsig_rawtx ).getId();
@@ -2152,6 +2278,7 @@
                         var stage_1_abort_signed_tx = psbt.extractTransaction().toHex();
                         var stage_1_abort_signed_txid = psbt.extractTransaction().getId();
                         console.log( "signed aborter:", stage_1_abort_signed_tx );
+                        sessionStorage[ "signed_aborter" ] = stage_1_abort_signed_tx;
                         console.log( "signed aborter txid:", stage_1_abort_signed_txid );
                         var aborter_psbt = psbt.toHex();
                         var signed_stage_1_funder_psbt = psbt.toHex();
@@ -2231,6 +2358,7 @@
                         // console.log( "signed stage 2 funder:", stage_2_funder_signed_tx );
                         // console.log( "signed stage 2 funder txid:", stage_2_funder_signed_txid );
                         //initialize penalty transaction
+                        //todo: set the right timelock
                         var timelock_for_penalty = blockheight + 25920;
                         var vout_for_penalty = 1;
                         //var prev_tx_hex = await getData( `https://mempool.space/testnet/api/tx/${txid}/hex` );
@@ -2271,8 +2399,8 @@
                         console.log( "unsigned stage 3 penalty, pre scriptsig:", unsigned_stage_3_penalty_rawtx );
                         console.log( "unsigned stage 3 penalty, pre scriptsig txid:", unsigned_stage_3_penalty_rawtx );
 
-                        var penalty_slice_1 = unsigned_stage_3_penalty_rawtx.slice(0, 82)
-                        var penalty_slice_2 = unsigned_stage_3_penalty_rawtx.slice(84)
+                        var penalty_slice_1 = unsigned_stage_3_penalty_rawtx.slice(0, 82);
+                        var penalty_slice_2 = unsigned_stage_3_penalty_rawtx.slice(84);
                         //var scriptsig = '17160014' + bitcoinjs.crypto.hash160(p2ms.output).toString('hex');
                         var scriptsig = '23220020' + bitcoinjs.crypto.sha256(p2ms.output).toString('hex');
                         var penalty_with_scriptsig_rawtx = penalty_slice_1 + scriptsig + penalty_slice_2;
@@ -2325,11 +2453,11 @@
                           value: Math.floor( ( ( usdt_collateral / 2 ) / btc_price ) * 100000000 ),
                         });
                         psbt.addOutput({
-                          address: borrowerAddress,
+                          address: usdt_address,
                           value: Math.floor( ( from_amount - mining_fee ) / 2 ),
                         });
                         psbt.addOutput({
-                          address: borrowerAddress,
+                          address: usdt_address,
                           value: Math.floor( ( from_amount - mining_fee ) / 2 ),
                         });
 
@@ -2338,8 +2466,8 @@
                         console.log( "unsigned payout, pre scriptsig:", unsigned_payout_rawtx );
                         console.log( "unsigned payout, pre scriptsig txid:", unsigned_payout_txid );
 
-                        var payout_slice_1 = unsigned_payout_rawtx.slice(0, 82)
-                        var payout_slice_2 = unsigned_payout_rawtx.slice(84)
+                        var payout_slice_1 = unsigned_payout_rawtx.slice(0, 82);
+                        var payout_slice_2 = unsigned_payout_rawtx.slice(84);
                         //var scriptsig = '17160014' + bitcoinjs.crypto.hash160(p2ms.output).toString('hex');
                         var scriptsig = '23220020' + bitcoinjs.crypto.sha256(p2ms.output).toString('hex');
                         var payout_with_scriptsig_rawtx = payout_slice_1 + scriptsig + payout_slice_2;
@@ -2374,7 +2502,7 @@
                         note[ "stage_2_funder_psbt" ] = stage_2_funder_psbt_hex;
                         note[ "stage_3_penalty_psbt" ] = penalty_psbt_hex;
                         note[ "stage_3_payout_psbt" ] = payout_psbt_hex;
-                        note[ "borrower_address" ] = borrowerAddress;
+                        note[ "borrower_address" ] = usdt_address;
                         note[ "btc_price" ] = btc_price;
                         note = JSON.stringify( note );
                         var encryptedNote = encrypt( privKey, event.pubkey, note );
