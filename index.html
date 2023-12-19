@@ -10,6 +10,7 @@
         <script src="https://bundle.run/bech32@2.0.0"></script>
         <script src="https://bundle.run/bip39@3.0.4"></script>
         <script src="https://bundle.run/bip32@2.0.6"></script>
+        <script src="https://bundle.run/bip65@1.0.3"></script>
         <style>
             * {
                 box-sizing: border-box;
@@ -192,20 +193,23 @@
                     var available_utxos = [];
                     var i1 = 0;
                     var i2 = 0;
+                    var gap = 0;
                     var i; for ( i=0; i<100_000; i++ ) {
-                        if ( i2 > 20 ) break;
+                        if ( gap > 20 ) break;
                         var path = `86'/0'/0'`;
                         var privkey = getPrivkeyHex( backupwords, path, i1 + i2 );
                         var address = getTaprootAddressFromPrivkeyHex( privkey, network );
-                        var balance = await getAddressBalance( address, network );
-                        if ( balance < 1 ) {
+                        var once_had_money = await addressOnceHadMoney( address, network );
+                        if ( !once_had_money ) {
                             i2 = Number( i2 ) + 1;
+                            gap = gap + 1;
                         } else {
                             i1 = Number( i1 ) + 1;
                             var utxos_in_this_address = await getUTXOs( privkey, network );
                             utxos_in_this_address.forEach( utxo => {
                                 available_utxos.push( utxo );
                             });
+                            gap = 0;
                         }
                     }
                     resolve( available_utxos );
@@ -217,20 +221,24 @@
                     var available_utxos = [];
                     var i1 = 0;
                     var i2 = 0;
+                    var gap = 0;
                     var i; for ( i=0; i<100_000; i++ ) {
-                        if ( i2 > 20 ) break;
+                        if ( gap > 20 ) break;
                         var path = "86'/0'/1'";
                         var privkey = getPrivkeyHex( backupwords, path, i1 + i2 );
                         var address = getTaprootAddressFromPrivkeyHex( privkey, network );
                         var balance = await getAddressBalance( address, network );
-                        if ( balance < 1 ) {
+                        var once_had_money = await addressOnceHadMoney( address, network );
+                        if ( !once_had_money ) {
                             i2 = Number( i2 ) + 1;
+                            gap = gap + 1;
                         } else {
                             i1 = Number( i1 ) + 1;
                             var utxos_in_this_address = await getUTXOs( privkey, network );
                             utxos_in_this_address.forEach( utxo => {
                                 available_utxos.push( utxo );
                             });
+                            gap = 0;
                         }
                     }
                     resolve( available_utxos );
@@ -490,14 +498,12 @@
                             "address": utxo[ "address" ],
                         });
                     });
-                    //the timelock is 144 blocks per day times 30 days to get the number of
-                    //blocks in a month, then multiply that by content.duration_of_loan to
-                    //get how many blocks the money should be locked for (since
-                    //content.duration_of_loan is measured in months)
-                    // var timelock = content.duration_of_loan * 30 * 144;
-                    var timelock = 3;
+                    var current_blockheight = await getBlockheight( "" );
+                    // var timelock = content.duration_of_loan * 30 * 144 + current_blockheight;
+                    var timelock = current_blockheight + 10;
+                    var script_timelock = convertNumToScript( timelock );
                     var scripts = [
-                        [ timelock, 'OP_CHECKSEQUENCEVERIFY', 'OP_DROP', lender, 'OP_CHECKSIG' ],
+                        [ script_timelock, 'OP_CHECKLOCKTIMEVERIFY', 'OP_DROP', lender, 'OP_CHECKSIG' ],
                         [ 0, lender, 'OP_CHECKSIGADD', pubKey, 'OP_CHECKSIGADD', 2, 'OP_EQUAL' ],
                         [ 'OP_RETURN', utxos_for_this_transaction[ 0 ][ "txid" ] + utxos_for_this_transaction[ 0 ][ "vout" ] ],
                     ];
@@ -517,6 +523,7 @@
                             "recovery": recovery_address,
                             "principle_address": principle_address,
                             "contract": contract_address,
+                            "timelock": timelock,
                         }
                     }
                     var encrypted = encrypt( privKey, lender, JSON.stringify( message_for_lender ) );
@@ -582,14 +589,20 @@
                 if ( !( "recovery" in json ) ) return;
                 if ( !( "principle_address" in json ) ) return;
                 if ( !( "contract" in json ) ) return;
+                if ( !( "timelock" in json ) ) return;
                 if ( !( "utxos" in json ) ) return;
                 if ( json[ "offer" ].length != 64 || !isValidHex( json[ "offer" ] ) ) return;
                 if ( !( json[ "offer" ] in my_offers ) ) return;
                 if ( typeof json[ "principle" ] != "number" ) return;
                 if ( json[ "principle" ] > my_offers[ json[ "offer" ] ][ "max_to_lend" ] ) return;
                 if ( json[ "principle" ] < my_offers[ json[ "offer" ] ][ "min_to_lend" ] ) return;
-                if ( !isValidAddress( json[ "principle_address" ] ) ) return;
                 if ( !isValidAddress( json[ "recovery" ] ) ) return;
+                if ( !isValidAddress( json[ "principle_address" ] ) ) return;
+                if ( typeof json[ "timelock" ] != "number" ) return;
+                var current_blockheight = await getBlockheight( "" );
+                // var expected_timelock = my_offers[ json[ "offer" ] ][ "duration_of_loan" ] * 30 * 144 + current_blockheight;
+                var expected_timelock = current_blockheight + 10;
+                if ( Math.abs( expected_timelock - json[ "timelock" ] ) > 2 ) return console.log( `couldn't agree on timelock. I had: ${expected_timelock}. They had: ${json[ "timelock" ]}. Difference was greater than 2 so no deal.` );
                 if ( typeof json[ "utxos" ] != "object" ) return;
                 if ( !json[ "utxos" ].length ) return;
                 var sum_of_values = 0;
@@ -613,10 +626,10 @@
                 if ( sum_of_values < collateral_requirement ) return;
                 var borrower_change = sum_of_values - collateral_requirement;
                 if ( !isValidAddress( json[ "contract" ] ) ) return;
-                // var timelock = my_offers[ json[ "offer" ] ][ "duration_of_loan" ] * 30 * 144;
-                var timelock = 3;
+                var timelock = json[ "timelock" ];
+                var script_timelock = convertNumToScript( timelock );
                 var scripts = [
-                    [ timelock, 'OP_CHECKSEQUENCEVERIFY', 'OP_DROP', pubKey, 'OP_CHECKSIG' ],
+                    [ script_timelock, 'OP_CHECKLOCKTIMEVERIFY', 'OP_DROP', pubKey, 'OP_CHECKSIG' ],
                     [ 0, pubKey, 'OP_CHECKSIGADD', borrower, 'OP_CHECKSIGADD', 2, 'OP_EQUAL' ],
                     [ 'OP_RETURN', json[ "utxos" ][ 0 ][ "txid" ] + json[ "utxos" ][ 0 ][ "vout" ] ],
                 ];
@@ -687,6 +700,7 @@
                 if ( lender_change ) {
                     var backup_words = sessionStorage[ "backup_words" ];
                     var lender_change_address = await getFirstUnusedChangeAddress( backup_words, "testnet/" );
+                    console.log( "change address:", lender_change_address );
                     outputs.push({
                         value: lender_change,
                         scriptPubKey: tapscript.Address.toScriptPubKey( lender_change_address ),
@@ -747,12 +761,13 @@
                             value: collateral_requirement,
                             scriptPubKey: tapscript.Address.toScriptPubKey( contract_address ),
                         },
-                        sequence: timelock,
+                        sequence: 0xfffffffd,
                     }],
                     vout: [{
                         value: collateral_requirement - mining_fee,
                         scriptPubKey: tapscript.Address.toScriptPubKey( repayment_address ),
                     }],
+                    locktime: Number( timelock ),
                 });
                 ready_to_finish_lender[ json[ "offer" ] ] = [ timelock, seizure_txdata[ "vin" ], seizure_target, seizure_script, seizure_cblock, contract_address, json, my_offers[ json[ "offer" ] ], borrower, json[ "offer" ] ];
                 sessionStorage[ "ready_to_finish_lender" ] = JSON.stringify( ready_to_finish_lender );
@@ -810,6 +825,7 @@
                     sum_of_values = sum_of_values + utxo[ "value" ];
                 }
                 var principle = my_accepts[ json[ "offer" ] ][ "msg" ][ "principle" ];
+                var timelock = my_accepts[ json[ "offer" ] ][ "msg" ][ "timelock" ];
                 var collateral_requirement = principle * Number( ( my_accepts[ json[ "offer" ] ][ "original_offer" ][ "collateral_for_loan" ] / 100 ).toFixed( 2 ) );
                 var borrower_change = sum_of_values - collateral_requirement;
                 var sum_of_values = 0;
@@ -936,11 +952,10 @@
                         scriptPubKey: tapscript.Address.toScriptPubKey( recovery_address ),
                     }],
                 });
-                // var timelock = my_accepts[ json[ "offer" ] ][ "original_offer" ][ "duration_of_loan" ] * 30 * 144;
-                var timelock = 3;
                 var utxos_for_this_transaction = my_accepts[ json[ "offer" ] ][ "msg" ][ "utxos" ];
+                var script_timelock = convertNumToScript( timelock );
                 var scripts = [
-                    [ timelock, 'OP_CHECKSEQUENCEVERIFY', 'OP_DROP', lender, 'OP_CHECKSIG' ],
+                    [ script_timelock, 'OP_CHECKLOCKTIMEVERIFY', 'OP_DROP', lender, 'OP_CHECKSIG' ],
                     [ 0, lender, 'OP_CHECKSIGADD', pubKey, 'OP_CHECKSIGADD', 2, 'OP_EQUAL' ],
                     [ 'OP_RETURN', utxos_for_this_transaction[ 0 ][ "txid" ] + utxos_for_this_transaction[ 0 ][ "vout" ] ],
                 ];
@@ -958,10 +973,8 @@
                 var isValid = await nobleSecp256k1.schnorr.verify( lenders_sig.substring( 0, 128 ), sighash.hex, lender );
                 if ( !isValid ) return alert( `Oh no, your counterparty's signture for the repayment tx was invalid! Aborting` );
                 var inputs_and_outputs = [ repayment_txdata[ "vin" ], repayment_txdata[ "vout" ] ];
-                var current_blockheight = await getBlockheight( "" );
-                var block_to_broadcast_in = current_blockheight + timelock;
-                if ( !( String( block_to_broadcast_in ) in ready_to_finish ) ) ready_to_finish[ String( block_to_broadcast_in ) ] = [];
-                ready_to_finish[ String( block_to_broadcast_in ) ].push( inputs_and_outputs, my_accepts[ json[ "offer" ] ], lender, lenders_sig );
+                if ( !( String( timelock ) in ready_to_finish ) ) ready_to_finish[ String( timelock ) ] = [];
+                ready_to_finish[ String( timelock ) ].push( inputs_and_outputs, my_accepts[ json[ "offer" ] ], lender, lenders_sig );
                 sessionStorage[ "ready_to_finish" ] = JSON.stringify( ready_to_finish );
             }
 
@@ -1058,6 +1071,7 @@
                     var item = Object.keys( ready_to_finish )[ i ];
                     var contract = ready_to_finish[ item ][ 1 ][ "msg" ][ "contract" ];
                     var principle = ready_to_finish[ item ][ 1 ][ "msg" ][ "principle" ];
+                    var timelock = ready_to_finish[ item ][ 1 ][ "msg" ][ "timelock" ];
                     var fee_to_borrow = ready_to_finish[ item ][ 1 ][ "original_offer" ][ "fee_to_borrow" ];
                     var duration_of_loan = ready_to_finish[ item ][ 1 ][ "original_offer" ][ "duration_of_loan" ];
                     var repayment_value = Math.round( principle * Number( `1.${fee_to_borrow}` ) );
@@ -1115,10 +1129,9 @@
                             vin: inputs,
                             vout: outputs,
                         });
-                        // var timelock = duration_of_loan * 30 * 144;
-                        var timelock = 3;
+                        var script_timelock = convertNumToScript( timelock );
                         var scripts = [
-                            [ timelock, 'OP_CHECKSEQUENCEVERIFY', 'OP_DROP', lender, 'OP_CHECKSIG' ],
+                            [ script_timelock, 'OP_CHECKLOCKTIMEVERIFY', 'OP_DROP', lender, 'OP_CHECKSIG' ],
                             [ 0, lender, 'OP_CHECKSIGADD', pubKey, 'OP_CHECKSIGADD', 2, 'OP_EQUAL' ],
                             [ 'OP_RETURN', custom_utxo ],
                         ];
@@ -1172,7 +1185,7 @@
                     var borrower = ready_to_finish_lender[ item ][ 8 ];
                     var original_offer_id = ready_to_finish_lender[ item ][ 9 ];
                     var principle = accept_msg[ "principle" ];
-                    var timelock = ready_to_finish_lender[ item ][ 0 ];
+                    var timelock = accept_msg[ "timelock" ];
                     try {
                         var fee_to_borrow = original_offer[ "fee_to_borrow" ];
                     } catch( e ) {
@@ -1187,15 +1200,15 @@
                     var collateral_requirement = principle * Number( ( collateral_for_loan / 100 ).toFixed( 2 ) );
                     var repayment_value = Math.round( principle * Number( `1.${fee_to_borrow}` ) );
                     var my_balance = await getBalanceFromUtxos( utxos );
-                    var current_blockheight = await getBlockheight( "" );
                     var txinfo = await addressReceivedMoneyInThisTx( contract, "" );
-                    //TODO: if, after several minutes, the borrower hasn't started the loan,
-                    //advise the lender to move his funds
-                    if ( !txinfo[ 0 ] ) return;
+                    if ( !txinfo[ 0 ] ) {
+                        $( '.active_contracts_lender' ).innerHTML = "";
+                        $( '.active_contracts_lender_div' ).classList.add( "hidden" );
+                        return;
+                    }
                     var blocks_since_confirmed = await howManyConfs( txinfo[ 0 ], "" );
                     var current_blockheight = await getBlockheight( "" );
-                    var time_left = ( ( current_blockheight - blocks_since_confirmed ) + timelock ) - current_blockheight;
-                    console.log( "time left:", time_left, "current_blockheight:", current_blockheight, "blocks_since_confirmed:", blocks_since_confirmed, "current_blockheight - blocks_since_confirmed:", current_blockheight - blocks_since_confirmed, "timelock:", timelock, "( current_blockheight - blocks_since_confirmed ) + timelock:", time_left );
+                    var time_left = timelock - current_blockheight;
                     var real_time_left = Number( String( time_left ) );
                     var block_or_blocks = "blocks";
                     if ( time_left == 1 ) block_or_blocks = "block";
@@ -1226,7 +1239,8 @@
                         var inputs = JSON.parse( hexToText( e.target.getAttribute( "data-vin" ) ) );
                         var borrower = e.target.getAttribute( "data-borrower" );
                         var custom_utxo = e.target.getAttribute( "data-custom_utxo" );
-                        var timelock = e.target.getAttribute( "data-timelock" );
+                        //TODO: uncomment the line below and remove the one beneath it
+                        var timelock = Number( e.target.getAttribute( "data-timelock" ) );
                         var target = e.target.getAttribute( "data-target" );
                         var script = JSON.parse( hexToText( e.target.getAttribute( "data-script" ) ) );
                         var cblock = e.target.getAttribute( "data-cblock" );
@@ -1242,9 +1256,11 @@
                         var seizure_txdata = tapscript.Tx.create({
                             vin: inputs,
                             vout: outputs,
+                            locktime: timelock,
                         });
+                        var script_timelock = convertNumToScript( timelock );
                         var scripts = [
-                            [ timelock, 'OP_CHECKSEQUENCEVERIFY', 'OP_DROP', pubKey, 'OP_CHECKSIG' ],
+                            [ script_timelock, 'OP_CHECKLOCKTIMEVERIFY', 'OP_DROP', pubKey, 'OP_CHECKSIG' ],
                             [ 0, pubKey, 'OP_CHECKSIGADD', borrower, 'OP_CHECKSIGADD', 2, 'OP_EQUAL' ],
                             [ 'OP_RETURN', custom_utxo ],
                         ];
@@ -1303,6 +1319,15 @@
                 return [txid, vout, amt];
             }
 
+            var reverseHexString = s => s.match(/[a-fA-F0-9]{2}/g).reverse().join('');
+
+            var convertNumToScript = num => {
+                if ( num > 99999 ) num = num.toString( 16 )
+                else return num;
+                if ( num.length % 2 ) num = "0" + num;
+                num = reverseHexString( num );
+                return num;
+            }
         </script>
         <script>
             var { getSharedSecret, schnorr, utils } = nobleSecp256k1;
