@@ -1,0 +1,1515 @@
+<!DOCTYPE html>
+<html>
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, user-scalable=no">
+        <script src="https://cdn.jsdelivr.net/gh/6502/sha256@main/sha256.js"></script>
+        <script src="https://bundle.run/browserify-cipher@1.0.1"></script>
+        <script src="https://unpkg.com/@cmdcode/tapscript@1.4.4"></script>
+        <script src="https://bundle.run/noble-secp256k1@1.2.14"></script>
+        <script src="https://bundle.run/bech32@2.0.0"></script>
+        <script src="https://bundle.run/bip39@3.0.4"></script>
+        <script src="https://bundle.run/bip32@2.0.6"></script>
+        <style>
+            * {
+                box-sizing: border-box;
+                font-size: 1.15rem;
+                font-family: Arial, sans-serif;
+            }
+            html {
+                max-width: 70ch;
+                padding: 3rem 1rem;
+                margin: auto;
+                line-height: 1.25;
+            }
+            h1 {
+                font-size: 2rem;
+            }
+            h2 {
+                font-size: 1.5rem;
+            }
+            input {
+                line-height: 1.25;
+                width: 100%;
+                height: 1.8rem;
+                font-size: 1.15rem;
+                border: 1px solid grey;
+            }
+            input[ type="checkbox" ] {
+                line-height: normal;
+                width: 1rem;
+                height: 1rem;
+                font-size: medium;
+                border: none;
+            }
+            .hidden {
+                display: none;
+            }
+            .bordered {
+                border: 1px solid black;
+                padding: 1rem;
+                margin-bottom: 1rem;
+                border-radius: 1rem;
+            }
+            .offer div {
+                margin-bottom: 1rem;
+            }
+            .offer_wizard {
+                display: none;
+            }
+            .flexy_box {
+                display: flex;
+                justify-content: space-around;
+            }
+            .pick_borrow_or_lend {
+                display: none;
+            }
+            .loan_offer {
+                display: none;
+            }
+            .active_contract, .active_contract_lender {
+                word-break: break-word;
+            }
+            @media screen and (max-width: 600px) {
+            }
+        </style>
+        <script>
+            var $ = document.querySelector.bind( document );
+            var $$ = document.querySelectorAll.bind( document );
+            var url_params = new URLSearchParams( window.location.search );
+            var url_keys = url_params.keys();
+            var $_GET = {}
+            for ( var key of url_keys ) $_GET[ key ] = url_params.get( key );
+        </script>
+        <script>
+            //temp account wallet 1: fancy shy similar gospel wisdom guess approve adult cruel govern spike swing
+            //temp account wallet 2: net novel chronic collect sponsor income humble kangaroo giggle crush argue shaft
+            var utxos = [];
+            var utxos_loaded = false;
+            var socket = {}
+            var my_offers = {}
+            if ( sessionStorage[ "my_offers" ] ) my_offers = JSON.parse( sessionStorage[ "my_offers" ] );
+            var messages_handled = [];
+            var my_accepts = {}
+            var ready_to_finish = {}
+            if ( sessionStorage[ "ready_to_finish" ] ) ready_to_finish = JSON.parse( sessionStorage[ "ready_to_finish" ] );
+            var ready_to_finish_lender = {}
+            if ( sessionStorage[ "ready_to_finish_lender" ] ) ready_to_finish_lender = JSON.parse( sessionStorage[ "ready_to_finish_lender" ] );
+            function getData( url ) {
+                return new Promise( async function( resolve, reject ) {
+                    function inner_get( url ) {
+                        var xhttp = new XMLHttpRequest();
+                        xhttp.open( "GET", url, true );
+                        xhttp.send();
+                        return xhttp;
+                    }
+                    var data = inner_get( url );
+                    data.onerror = function( e ) {
+                        resolve( "error" );
+                    }
+                    async function isResponseReady() {
+                        return new Promise( function( resolve2, reject ) {
+                            if ( !data.responseText || data.readyState != 4 ) {
+                                setTimeout( async function() {
+                                    var msg = await isResponseReady();
+                                    resolve2( msg );
+                                }, 1 );
+                            } else {
+                                resolve2( data.responseText );
+                            }
+                        });
+                    }
+                    var returnable = await isResponseReady();
+                    resolve( returnable );
+                });
+            }
+
+            var generateWords = twelveortwentyfour => {
+                if ( twelveortwentyfour === 24 ) var entropy = 256; else var entropy = 128;    
+                return bip39.generateMnemonic( entropy );
+            }
+
+            function getPrivkeyHex( backupwords, path, index ) {
+                //segwit path is 84'/0'/0'
+                //taproot path is 86'/0'/0'
+                var seed = bip39.mnemonicToSeedSync( backupwords );
+                var node = bip32.fromSeed( seed );
+                var path = "m/" + path + "/" + index;
+                var root = node;
+                var child = root.derivePath( path );
+                return child.privateKey.toString( "hex" );
+            }
+
+            async function getAddressBalance( address, network ) {
+                //TODO: remove the following line when switching to mempool.space
+                network = "";
+                var nonjson = await getData( "https://mutinynet.com/" + network + "api/address/" + address );
+                try {
+                    var json = JSON.parse( nonjson );
+                } catch( e ) {
+                    return 0;
+                }
+                var fullincome = json[ "chain_stats" ][ "funded_txo_sum" ] + json[ "mempool_stats" ][ "funded_txo_sum" ];
+                var fulloutgo = json[ "chain_stats" ][ "spent_txo_sum" ] + json[ "mempool_stats" ][ "spent_txo_sum" ];
+                return fullincome - fulloutgo;
+            }
+
+            function getCompressedPubkeyHexFromPrivkeyHex( privkeyhex ) {
+                return nobleSecp256k1.getPublicKey( privkeyhex, true );
+            }
+
+            function getTaprootAddressFromPrivkeyHex( privkeyhex, network ) {
+                network = network.replaceAll( "/", "" );
+                var pubkey = getCompressedPubkeyHexFromPrivkeyHex( privkeyhex );
+                var [ tpubkey ] = tapscript.Tap.getPubKey( pubkey );
+                var address = tapscript.Address.p2tr.encode( tpubkey, network );
+                return address;
+            }
+
+            async function getUTXOs( privkey, network ) {
+                var pubkey = getCompressedPubkeyHexFromPrivkeyHex( privkey );
+                var address = getTaprootAddressFromPrivkeyHex( privkey, network );
+                //TODO: remove the following line when switching to mempool.space
+                network = "";
+                var esplorautxos = await getData( "https://mutinynet.com/" + network + "api/address/" + address + "/utxo" );
+                esplorautxos = JSON.parse( esplorautxos );
+                var obj = [];
+                esplorautxos.forEach( async ( item, index ) => {
+                    var utxo = {}
+                    utxo[ "tx_id" ] = item[ "txid" ];
+                    utxo[ "output_number" ] = item[ "vout" ];
+                    utxo[ "amount" ] = item[ "value" ];
+                    utxo[ "privkey" ] = privkey;
+                    utxo[ "pubkey" ] = pubkey;
+                    utxo[ "address" ] = address;
+                    obj.push( utxo );
+                });
+                return( obj );
+            }
+
+            async function getAvailableUtxosFromReceivePath( backupwords, network ) {
+                return new Promise( async function( resolve, reject ) {
+                    var available_utxos = [];
+                    var i1 = 0;
+                    var i2 = 0;
+                    var i; for ( i=0; i<100_000; i++ ) {
+                        if ( i2 > 20 ) break;
+                        var path = `86'/0'/0'`;
+                        var privkey = getPrivkeyHex( backupwords, path, i1 + i2 );
+                        var address = getTaprootAddressFromPrivkeyHex( privkey, network );
+                        var balance = await getAddressBalance( address, network );
+                        if ( balance < 1 ) {
+                            i2 = Number( i2 ) + 1;
+                        } else {
+                            i1 = Number( i1 ) + 1;
+                            var utxos_in_this_address = await getUTXOs( privkey, network );
+                            utxos_in_this_address.forEach( utxo => {
+                                available_utxos.push( utxo );
+                            });
+                        }
+                    }
+                    resolve( available_utxos );
+                });
+            }
+
+            async function getAvailableUtxosFromChangePath( backupwords, network ) {
+                return new Promise( async function( resolve, reject ) {
+                    var available_utxos = [];
+                    var i1 = 0;
+                    var i2 = 0;
+                    var i; for ( i=0; i<100_000; i++ ) {
+                        if ( i2 > 20 ) break;
+                        var path = "86'/0'/1'";
+                        var privkey = getPrivkeyHex( backupwords, path, i1 + i2 );
+                        var address = getTaprootAddressFromPrivkeyHex( privkey, network );
+                        var balance = await getAddressBalance( address, network );
+                        if ( balance < 1 ) {
+                            i2 = Number( i2 ) + 1;
+                        } else {
+                            i1 = Number( i1 ) + 1;
+                            var utxos_in_this_address = await getUTXOs( privkey, network );
+                            utxos_in_this_address.forEach( utxo => {
+                                available_utxos.push( utxo );
+                            });
+                        }
+                    }
+                    resolve( available_utxos );
+                });
+            }
+
+            async function checkAddresses( backupwords, network ) {
+                var available_utxos_1 = await getAvailableUtxosFromReceivePath( backupwords, network );
+                var available_utxos_2 = await getAvailableUtxosFromChangePath( backupwords, network );
+                available_utxos_2.forEach( function( item ) {
+                    available_utxos_1.push( item );
+                });
+                return available_utxos_1;
+            }
+
+            async function getBalanceFromUtxos( utxos ) {
+                var balance = 0;
+                utxos.forEach( item => balance = balance + Number( item[ "amount" ] ));
+                return Number( balance );
+            }
+            var init = async () => {
+                if ( !$( '.offer' ) ) $( '.nothing_in_orderbook' ).classList.remove( "hidden" );
+                purgeOldContracts();
+                displayActiveContracts();
+                displayActiveContractsLender();
+                var now = Math.floor( Date.now() / 1000 );
+                var now_minus_ten = now - 600;
+                var i; for ( i=0; i<Object.keys( my_offers ).length; i++ ) {
+                    var key = Object.keys( my_offers )[ i ];
+                    var item = my_offers[ key ];
+                    if ( !( "timestamp" in item ) || item[ "timestamp" ] < now_minus_ten ) {
+                        delete my_offers[ key ];
+                        sessionStorage[ "my_offers" ] = JSON.stringify( my_offers );
+                    }
+                }
+                if ( "utxos" in sessionStorage ) utxos = JSON.parse( sessionStorage[ "utxos" ] );
+                var balance = await getBalanceFromUtxos( utxos );
+                $( '.balance' ).innerText = `${balance} sats`;
+                var backup_words;
+                if ( sessionStorage[ "backup_words" ] ) backup_words = sessionStorage[ "backup_words" ];
+                if ( !backup_words ) {
+                    await waitSomeSeconds( 3 );
+                    return init();
+                } else {
+                    $( '.login' ).click();
+                }
+                utxos = await checkAddresses( backup_words, "testnet/" );
+                utxos_loaded = true;
+                sessionStorage[ "utxos" ] = JSON.stringify( utxos );
+                await waitSomeSeconds( 3 );
+                init();
+            }
+
+            var waitSomeSeconds = num => {
+                var num = num.toString() + "000";
+                num = Number( num );
+                return new Promise( resolve => setTimeout( resolve, num ) );
+            }
+
+            var hider = reveal => {
+                $( '.homepage' ).classList.add( "hidden" );
+                $( '.wallet' ).classList.add( "hidden" );
+                $( '.new_loan_page' ).classList.add( "hidden" );
+                $( `.${reveal}` ).classList.remove( "hidden" );
+            }
+
+            //spendCoins( "tb1qd28npep0s8frcm3y7dxqajkcy2m40eysplyr9v", 1000, "testnet/" );
+            var spendCoins = async ( destino, amt, sats_per_byte, network ) => {
+                var inputs = [];
+                var outputs = [];
+                var from_amount = 0;
+                utxos.forEach( utxo => {
+                    var [ tpubkey ] = tapscript.Tap.getPubKey( utxo[ "pubkey" ].substring( 2 ) );
+                    from_amount = from_amount + utxo[ "amount" ];
+                    var txid = utxo[ "tx_id" ];
+                    var vout = utxo[ "output_number" ];
+                    var amount = utxo[ "amount" ];
+                    inputs.push({
+                        txid: txid,
+                        vout: vout,
+                        prevout: {
+                            value: amount,
+                            scriptPubKey: [ 'OP_1', tpubkey ]
+                        },
+                    });
+                });
+                if ( !from_amount ) return alert( "You cannot spend without money. Please make a deposit, then try again." );
+                var to_amount = amt;
+                var there_be_dust = false;
+                outputs.push({
+                    value: to_amount,
+                    scriptPubKey: tapscript.Address.toScriptPubKey( destino ),
+                });
+                if ( to_amount < 546 ) there_be_dust = true;
+                if ( there_be_dust ) return alert( "You cannot send less than 546 sats because that is bitcoin's dust limit. Please try again" );
+                if ( from_amount - to_amount < 1 ) return alert( "You must leave enough to pay a mining fee, please try again" );
+                var txsize = 0;
+                inputs.forEach( item => txsize = txsize + 64 + 32 + 8 );
+                var i; for ( i=0; i<outputs.length; i++ ) {
+                    //I calculate that outputs add 30 bytes apiece by
+                    //assuming the average scriptpubkey is 26 bytes
+                    //and assuming amounts are denoted in 4 bytes
+                    txsize = txsize + 30;
+                }
+                var mining_fee = txsize * sats_per_byte;
+                if ( mining_fee < 172 ) mining_fee = 172;
+                if ( from_amount - to_amount < mining_fee ) return alert( `With your chosen fee rate you must leave at least ${mining_fee} sats to pay for mining fees, which means the max you can spend is ${from_amount - mining_fee} sats. Please try again` );
+                var backup_words = sessionStorage[ "backup_words" ];
+                var change_address = await getFirstUnusedChangeAddress( backup_words, network );
+                if ( from_amount - ( to_amount + mining_fee ) >= 546 ) {
+                    outputs.push({
+                        value: from_amount - ( to_amount + mining_fee ),
+                        scriptPubKey: tapscript.Address.toScriptPubKey( change_address ),
+                    });
+                }
+                var txdata = tapscript.Tx.create({
+                    vin  : inputs,
+                    vout : outputs,
+                });
+                utxos.forEach( ( utxo, index ) => {
+                    var [ tseckey ] = tapscript.Tap.getSecKey( utxo[ "privkey" ] );
+                    var sig = tapscript.Signer.taproot.sign( tseckey, txdata, index );
+                    txdata.vin[ index ].witness = [ sig ];
+                });
+                var txhex = tapscript.Tx.encode( txdata ).hex;
+                alert( `Broadcast this txhex:\n\n${txhex}` );
+            }
+
+            async function getThreeFeeRates( network ) {
+                //TODO: remove the following line when switching to mempool.space
+                network = "";
+                var fees = await getData("https://mutinynet.com/" + network + "api/v1/fees/recommended");
+                fees = JSON.parse(fees);
+                var array = [ fees["minimumFee"], fees["hourFee"], fees["fastestFee"] ];
+                return array;
+            }
+
+            var getFirstUnusedReceiveAddress = async ( backupwords, network ) => {
+                var first_unused_address = "";
+                var path = `86'/0'/0'`;
+                var i; for ( i=0; i<100_000; i++ ) {
+                    var privkey = getPrivkeyHex( backupwords, path, i );
+                    var address = getTaprootAddressFromPrivkeyHex( privkey, network );
+                    var address_is_used = await addressOnceHadMoney( address, network );
+                    if ( !address_is_used ) {
+                        first_unused_address = address;
+                        break;
+                    }
+                }
+                return first_unused_address;
+            }
+
+            var getFirstUnusedChangeAddress = async ( backupwords, network ) => {
+                var first_unused_change_address = "";
+                var path = `86'/0'/1'`;
+                var i; for ( i=0; i<100_000; i++ ) {
+                    var privkey = getPrivkeyHex( backupwords, path, i );
+                    var address = getTaprootAddressFromPrivkeyHex( privkey, network );
+                    var address_is_used = await addressOnceHadMoney( address, network );
+                    if ( !address_is_used ) {
+                        first_unused_change_address = address;
+                        break;
+                    }
+                }
+                return first_unused_change_address;
+            }
+
+            async function addressOnceHadMoney( address, network ) {
+                //TODO: remove the following line when switching to mempool.space
+                network = "";
+                var nonjson = await getData( "https://mutinynet.com/" + network + "api/address/" + address );
+                var json = JSON.parse( nonjson );
+                if ( json[ "chain_stats" ][ "tx_count" ] > 0 || json[ "mempool_stats" ][ "tx_count" ] > 0 ) return true;
+                return false;
+            }
+
+            var SHA256 = string_or_uint8array => bytesToHex( sha256( string_or_uint8array ) );
+            var bytesToHex = bytes => bytes.reduce( ( str, byte ) => str + byte.toString( 16 ).padStart( 2, "0" ), "" );
+            var hexToBytes = hex => Uint8Array.from( hex.match( /.{1,2}/g ).map( ( byte ) => parseInt( byte, 16 ) ) );
+            
+            function base64ToHex( str ) {
+                var raw = atob( str );
+                var result = '';
+                var i; for ( i=0; i<raw.length; i++ ) {
+                    var hex = raw.charCodeAt( i ).toString( 16 );
+                    result += ( hex.length === 2 ? hex : '0' + hex );
+                }
+                return result;
+            }
+
+            var handle10062 = event => {
+                if ( $( `div[ data-event_id="${event.id}" ]` ) ) {
+                    var offer = $( `div[ data-event_id="${event.id}" ]` );
+                    if ( offer.getElementsByClassName( "fill_in_details" )[ 0 ].classList.contains( "hidden" ) ) offer.remove();
+                    else return;
+                }
+                var lender = event.pubkey;
+                var content = JSON.parse( event[ "content" ] );
+                var div = document.createElement( 'div' );
+                var min_to_lend = content.min_to_lend;
+                var max_to_lend = content.max_to_lend;
+                if ( min_to_lend > 100000 ) {
+                    min_to_lend = satsToBitcoin( min_to_lend ) + " btc";
+                } else {
+                    min_to_lend = min_to_lend.toLocaleString() + " sats";
+                }
+                if ( max_to_lend > 100000 ) {
+                    max_to_lend = satsToBitcoin( max_to_lend ) + " btc";
+                } else {
+                    max_to_lend = max_to_lend.toLocaleString() + " sats";
+                }
+                div.innerHTML = `<div class="offer bordered">
+                    <div>You will get: <span><span class="min"></span> - <span class="max"></span></span></div>
+                    <div>You must pay: principle plus <span class="fee_to_borrow"></span>%</div>
+                    <div>Collateral: <span class="collateral"></span>% principle</div>
+                    <div>Loan duration: <span class="duration_of_loan"></span> months</div>
+                    <div><button class="accept_offer">Accept offer</button></div>
+                    <div class="fill_in_details hidden">
+                        <p>
+                            Enter how many sats you want to borrow (use sats and no decimal points)
+                        </p>
+                        <p>
+                            <input type="number" step="1" class="enter_amount">
+                        </p>
+                        <p>
+                            <button class="finalize_acceptance">Submit</button>
+                        </p>
+                    </div>
+                </div>`;
+                div.getElementsByClassName( "offer" )[ 0 ].setAttribute( "data-timestamp", Math.floor( Date.now() / 1000 ) );
+                div.getElementsByClassName( "offer" )[ 0 ].setAttribute( "data-pubkey", lender );
+                div.getElementsByClassName( "offer" )[ 0 ].setAttribute( "data-event_id", event.id );
+                div.getElementsByClassName( "min" )[ 0 ].setAttribute( "data-minval", min_to_lend );
+                div.getElementsByClassName( "min" )[ 0 ].innerText = min_to_lend;
+                div.getElementsByClassName( "max" )[ 0 ].setAttribute( "data-maxval", max_to_lend );
+                div.getElementsByClassName( "max" )[ 0 ].innerText = max_to_lend;
+                div.getElementsByClassName( "fee_to_borrow" )[ 0 ].innerText = content.fee_to_borrow;
+                div.getElementsByClassName( "collateral" )[ 0 ].innerText = content.collateral_for_loan;
+                div.getElementsByClassName( "duration_of_loan" )[ 0 ].innerText = content.duration_of_loan;
+                var finalize_button = div.getElementsByClassName( "finalize_acceptance" )[ 0 ];
+                div.getElementsByClassName( "accept_offer" )[ 0 ].onclick = () => {
+                    if ( div.getElementsByClassName( "offer" )[ 0 ].getAttribute( "data-pubkey" ) == pubKey ) return alert( `You cannot accept your own offer` );
+                    div.getElementsByClassName( "fill_in_details" )[ 0 ].classList.remove( "hidden" );
+                }
+                finalize_button.onclick = async () => {
+                    var principle = Number( div.getElementsByClassName( "enter_amount" )[ 0 ].value );
+                    var collateral = principle * Number( ( content.collateral_for_loan / 100 ).toFixed( 2 ) );
+                    var btc_holdings = 0;
+                    utxos.forEach(  utxo => btc_holdings = btc_holdings + utxo[ "amount" ] );
+                    if ( btc_holdings < collateral ) return alert( `This loan for ${principle} sats requires you to post ${collateral} sats as collateral. You only have ${btc_holdings} sats. Please use the Wallet button to add ${collateral - btc_holdings} sats if you wish to continue` );
+                    var utxos_for_this_transaction = [];
+                    utxos.forEach( utxo => {
+                        utxos_for_this_transaction.push({
+                            "value": utxo[ "amount" ],
+                            "txid": utxo[ "tx_id" ],
+                            "vout": utxo[ "output_number" ],
+                            "address": utxo[ "address" ],
+                        });
+                    });
+                    //the timelock is 144 blocks per day times 30 days to get the number of
+                    //blocks in a month, then multiply that by content.duration_of_loan to
+                    //get how many blocks the money should be locked for (since
+                    //content.duration_of_loan is measured in months)
+                    // var timelock = content.duration_of_loan * 30 * 144;
+                    var timelock = 3;
+                    var scripts = [
+                        [ timelock, 'OP_CHECKSEQUENCEVERIFY', 'OP_DROP', lender, 'OP_CHECKSIG' ],
+                        [ 0, lender, 'OP_CHECKSIGADD', pubKey, 'OP_CHECKSIGADD', 2, 'OP_EQUAL' ],
+                        [ 'OP_RETURN', utxos_for_this_transaction[ 0 ][ "txid" ] + utxos_for_this_transaction[ 0 ][ "vout" ] ],
+                    ];
+                    var tree = scripts.map(s => tapscript.Tap.encodeScript(s))
+                    var pubkey = "ab".repeat( 32 );
+                    var [ tpubkey ] = tapscript.Tap.getPubKey(pubkey, { tree });
+                    var contract_address = tapscript.Address.p2tr.fromPubKey( tpubkey, 'testnet' );
+                    var backup_words = sessionStorage[ "backup_words" ];
+                    var recovery_address = await getFirstUnusedChangeAddress( backup_words, "testnet/" );
+                    var principle_address = await getFirstUnusedReceiveAddress( backup_words, "testnet/" );
+                    var message_for_lender = {
+                        msg_type: "accept",
+                        msg: {
+                            "offer": event.id,
+                            "utxos": utxos_for_this_transaction,
+                            "principle": principle,
+                            "recovery": recovery_address,
+                            "principle_address": principle_address,
+                            "contract": contract_address,
+                        }
+                    }
+                    var encrypted = encrypt( privKey, lender, JSON.stringify( message_for_lender ) );
+                    var offerEvent = {
+                        content: encrypted,
+                        created_at: Math.floor(Date.now() / 1000),
+                        kind: 4,
+                        tags: [ [ "p", lender ] ],
+                        pubkey: pubKey,
+                    };
+                    var signedOffer = await getSignedEvent(offerEvent, privKey);
+                    socket.send(JSON.stringify(['EVENT', signedOffer]));
+                    message_for_lender[ "original_offer" ] = content;
+                    my_accepts[ event.id ] = message_for_lender;
+                }
+                $( '.nothing_in_orderbook' ).classList.add( "hidden" );
+                $( '.orderbook' ).append( div );
+            }
+
+            var getXprvFromWords = ( backupwords, pathpart = 0 ) => {
+                var hardened = false;
+                if ( String( pathpart ).includes( "'" ) ) hardened = true;
+                if ( String( pathpart ).includes( "'" ) ) pathpart = Number( pathpart.replaceAll( "'", "" ) );
+                var seed = bip39.mnemonicToSeedSync( backupwords );
+                var node = bip32.fromSeed( seed );
+                var root = node.toBase58();
+                var result = bip32.fromBase58( root ).derive( pathpart ).toBase58();
+                if ( hardened ) result = bip32.fromBase58( root ).deriveHardened( pathpart ).toBase58();
+                return result;
+            }
+
+            var getKeypairFromXprv = ( xprv, index ) => {
+                //the path is m/0/index
+                //to do m/0/0/index just add .derive( 0 ) before .derive( index )
+                //to change the first 0, change the .derive( 0 ) in the last line of getXprvFromWords
+                var privkey = bip32.fromBase58( xprv ).deriveHardened( 1237 ).deriveHardened( 0 ).derive( 0 ).derive( index ).privateKey.toString( "hex" );
+                var pubkey = bip32.fromBase58( xprv ).deriveHardened( 1237 ).deriveHardened( 0 ).derive( 0 ).derive( index ).publicKey.toString( "hex" );
+                return [privkey, pubkey];
+            }
+
+            function satsToBitcoin( sats ) {
+                if ( sats >= 100000000 ) sats = sats * 10;
+                return String( sats ).padStart( 8, "0" ).slice( 0,-9 ) + "." + String( sats ).padStart( 8, "0" ).slice( -9 );
+            }
+
+            var handle4 = ( content, borrower ) => {
+                var is_valid_json = isValidJson( content );
+                if ( !is_valid_json ) return;
+                json = JSON.parse( content );
+                if ( !( "msg_type" in json ) ) return;
+                if ( !( "msg" in json ) ) return;
+                if ( json[ "msg_type" ] == "accept" ) return handleAccept( JSON.stringify( json[ "msg" ] ), borrower );
+                if ( json[ "msg_type" ] == "finalize" ) return handleFinalize( JSON.stringify( json[ "msg" ] ), borrower );
+                else console.log( borrower, content );
+            }
+
+            var handleAccept = async ( content, borrower ) => {
+                var is_valid_json = isValidJson( content );
+                if ( !is_valid_json ) return;
+                json = JSON.parse( content );
+                if ( !( "offer" in json ) ) return;
+                if ( !( "principle" in json ) ) return;
+                if ( !( "recovery" in json ) ) return;
+                if ( !( "principle_address" in json ) ) return;
+                if ( !( "contract" in json ) ) return;
+                if ( !( "utxos" in json ) ) return;
+                if ( json[ "offer" ].length != 64 || !isValidHex( json[ "offer" ] ) ) return;
+                if ( !( json[ "offer" ] in my_offers ) ) return;
+                if ( typeof json[ "principle" ] != "number" ) return;
+                if ( json[ "principle" ] > my_offers[ json[ "offer" ] ][ "max_to_lend" ] ) return;
+                if ( json[ "principle" ] < my_offers[ json[ "offer" ] ][ "min_to_lend" ] ) return;
+                if ( !isValidAddress( json[ "principle_address" ] ) ) return;
+                if ( !isValidAddress( json[ "recovery" ] ) ) return;
+                if ( typeof json[ "utxos" ] != "object" ) return;
+                if ( !json[ "utxos" ].length ) return;
+                var sum_of_values = 0;
+                var inputs = [];
+                var i; for ( i=0; i<json[ "utxos" ].length; i++ ) {
+                    var utxo = json[ "utxos" ][ i ];
+                    var valid = await isUTXOValid( utxo[ "txid" ], utxo[ "vout" ], utxo[ "value" ], utxo[ "address" ], "" );
+                    if ( !valid ) return;
+                    sum_of_values = sum_of_values + utxo[ "value" ];
+                    inputs.push({
+                        txid: utxo[ "txid" ],
+                        vout: utxo[ "vout" ],
+                        prevout: {
+                            value: utxo[ "value" ],
+                            scriptPubKey: tapscript.Address.toScriptPubKey( utxo[ "address" ] ),
+                        },
+                    });
+                }
+                console.log( "offer:", json[ "offer" ], "my offers:", Object.keys( my_offers ), my_offers );
+                var collateral_requirement = json[ "principle" ] * Number( ( my_offers[ json[ "offer" ] ][ "collateral_for_loan" ] / 100 ).toFixed( 2 ) );
+                if ( sum_of_values < collateral_requirement ) return;
+                var borrower_change = sum_of_values - collateral_requirement;
+                if ( !isValidAddress( json[ "contract" ] ) ) return;
+                // var timelock = my_offers[ json[ "offer" ] ][ "duration_of_loan" ] * 30 * 144;
+                var timelock = 3;
+                var scripts = [
+                    [ timelock, 'OP_CHECKSEQUENCEVERIFY', 'OP_DROP', pubKey, 'OP_CHECKSIG' ],
+                    [ 0, pubKey, 'OP_CHECKSIGADD', borrower, 'OP_CHECKSIGADD', 2, 'OP_EQUAL' ],
+                    [ 'OP_RETURN', json[ "utxos" ][ 0 ][ "txid" ] + json[ "utxos" ][ 0 ][ "vout" ] ],
+                ];
+                var tree = scripts.map(s => tapscript.Tap.encodeScript(s));
+                var pubkey = "ab".repeat( 32 );
+                var script = scripts[ 1 ];
+                var target = tapscript.Tap.encodeScript(script);
+                var [ tpubkey, cblock ] = tapscript.Tap.getPubKey(pubkey, { tree, target });
+                var seizure_script = scripts[ 0 ];
+                var seizure_target = tapscript.Tap.encodeScript(seizure_script);
+                var [ tpubkey, seizure_cblock ] = tapscript.Tap.getPubKey(pubkey, { tree, target: seizure_target });
+                var contract_address = tapscript.Address.p2tr.fromPubKey( tpubkey, 'testnet' );
+                if ( contract_address != json[ "contract" ] ) return;
+                var utxos_for_this_transaction = [];
+                utxos.forEach( utxo => {
+                    utxos_for_this_transaction.push({
+                        "value": utxo[ "amount" ],
+                        "txid": utxo[ "tx_id" ],
+                        "vout": utxo[ "output_number" ],
+                        "address": utxo[ "address" ],
+                    });
+                });
+                var sum_of_values = 0;
+                var i; for ( i=0; i<utxos_for_this_transaction.length; i++ ) {
+                    var utxo = utxos_for_this_transaction[ i ];
+                    inputs.push({
+                        txid: utxo[ "txid" ],
+                        vout: utxo[ "vout" ],
+                        prevout: {
+                            value: utxo[ "value" ],
+                            scriptPubKey: tapscript.Address.toScriptPubKey( utxo[ "address" ] ),
+                        },
+                    });
+                    sum_of_values = sum_of_values + utxo[ "value" ];
+                }
+                if ( sum_of_values - json[ "principle" ] != 0 && sum_of_values - json[ "principle" ] < 546 ) return alert( `Your utxos are worth ${sum_of_values} sats and the principle is ${collateral_requirement} sats, leaving you with leftover change of ${sum_of_values - json[ "principle" ]} sats, which is less than the dust limit of 546. Add another utxo to resolve this problem.` );
+                var lender_change = sum_of_values - json[ "principle" ];
+                var outputs = [];
+                var txsize = 0;
+                inputs.forEach( item => txsize = txsize + 64 + 32 + 8 );
+                var num_of_outputs_to_expect = 2;
+                if ( lender_change ) num_of_outputs_to_expect = 3;
+                var i; for ( i=0; i<num_of_outputs_to_expect; i++ ) {
+                    //I calculate that outputs add 30 bytes apiece by
+                    //assuming the average scriptpubkey is 26 bytes
+                    //and assuming amounts are denoted in 4 bytes
+                    txsize = txsize + 30;
+                }
+                var fee_options = await getThreeFeeRates( "" );
+                var sats_per_byte = prompt( `Please enter a fee rate as a number. Specifically, the number of sats per byte you want to pay. The minimum rate is ${fee_options[ 0 ]}, the average rate is ${fee_options[ 1 ]}, and the urgent rate is ${fee_options[ 2 ]}.` );
+                sats_per_byte = Number( sats_per_byte );
+                if ( !sats_per_byte ) return alert( "You entered an invalid fee rate. You must enter a number greater than 0, such as 5, 10, or 25. Please try again." );
+                var mining_fee = txsize * sats_per_byte;
+                if ( mining_fee < 172 ) mining_fee = 172;
+                //this first output (vout 0) puts the collateral in the contract
+                outputs.push({
+                    value: collateral_requirement,
+                    scriptPubKey: tapscript.Address.toScriptPubKey( contract_address ),
+                });
+                var amount_for_borrower = json[ "principle" ];
+                if ( borrower_change ) amount_for_borrower = amount_for_borrower + borrower_change - mining_fee;
+                //this second vout (vout 1) gives the principle, and some change if necessary, to the borrower
+                outputs.push({
+                    value: amount_for_borrower,
+                    scriptPubKey: tapscript.Address.toScriptPubKey( json[ "principle_address" ] ),
+                });
+                //this optional third vout (vout 2) gives some change, if necessary, to the lender
+                if ( lender_change ) {
+                    var backup_words = sessionStorage[ "backup_words" ];
+                    var lender_change_address = await getFirstUnusedChangeAddress( backup_words, "testnet/" );
+                    outputs.push({
+                        value: lender_change,
+                        scriptPubKey: tapscript.Address.toScriptPubKey( lender_change_address ),
+                    });
+                }
+                var txdata = tapscript.Tx.create({
+                    vin: inputs,
+                    vout: outputs,
+                });
+                var index_of_my_inputs = txdata[ "vin" ].length - utxos.length;
+                var my_sigs = [];
+                var num = 0;
+                var i; for ( i=index_of_my_inputs; i<txdata[ "vin" ].length; i++ ) {
+                    var [ tseckey ] = tapscript.Tap.getSecKey( utxos[ num ][ "privkey" ] );
+                    my_sigs.push( tapscript.Signer.taproot.sign( tseckey, txdata, i ).hex );
+                    var sighash = await tapscript.Signer.taproot.hash( txdata, i );
+                    txdata.vin[ i ].witness = [ my_sigs[ num ] ];
+                    num = num + 1;
+                }
+                var txhex = tapscript.Tx.encode( txdata ).hex;
+                var txid = tapscript.Tx.util.getTxid( txhex );
+                var repayment_value = Math.round( json[ "principle" ] * Number( `1.${my_offers[ json[ "offer" ] ][ "fee_to_borrow" ]}` ) );
+                //each input contributes a 64 byte signature, a 32 byte txid, a 4 byte vout, and 4 extra bytes for padding
+                var txsize = 64 + 32 + 8;
+                //each output contributes a 26 byte scriptpubkey and a 4 byte value
+                txsize = txsize + 30 * 2;
+                var mining_fee = txsize * sats_per_byte;
+                if ( mining_fee < 172 ) mining_fee = 172;
+                var repayment_address = await getFirstUnusedReceiveAddress( backup_words, "testnet/" );
+                var repayment_txdata = tapscript.Tx.create({
+                    vin: [{
+                        txid: txid,
+                        vout: 0,
+                        prevout: {
+                            value: collateral_requirement,
+                            scriptPubKey: tapscript.Address.toScriptPubKey( contract_address ),
+                        },
+                    }],
+                    vout: [{
+                        value: repayment_value,
+                        scriptPubKey: tapscript.Address.toScriptPubKey( repayment_address ),
+                    },{
+                        value: collateral_requirement,
+                        scriptPubKey: tapscript.Address.toScriptPubKey( json[ "recovery" ] ),
+                    }],
+                });
+                var sig = tapscript.Signer.taproot.sign( privKey, repayment_txdata, 0, { extension: target, sigflag: 128 | 2 } ).hex;
+                repayment_txdata.vin[ 0 ].witness = [ sig, script, cblock ];
+                var isValid = await tapscript.Signer.taproot.verify( repayment_txdata, 0, { extension: target, sigflag: 128 | 2, pubkey: pubKey });
+                var sighash = await tapscript.Signer.taproot.hash( repayment_txdata, 0, { extension: target, sigflag: 128 | 2 } );
+                var isValid = await nobleSecp256k1.schnorr.verify( sig.substring( 0, 128 ), sighash.hex, pubKey );
+                if ( !isValid ) return alert( `Oh no, your signture for the repayment tx was invalid! Ask a developer for help` );
+                var seizure_txdata = tapscript.Tx.create({
+                    vin: [{
+                        txid: txid,
+                        vout: 0,
+                        prevout: {
+                            value: collateral_requirement,
+                            scriptPubKey: tapscript.Address.toScriptPubKey( contract_address ),
+                        },
+                        sequence: timelock,
+                    }],
+                    vout: [{
+                        value: collateral_requirement - mining_fee,
+                        scriptPubKey: tapscript.Address.toScriptPubKey( repayment_address ),
+                    }],
+                });
+                ready_to_finish_lender[ json[ "offer" ] ] = [ timelock, seizure_txdata[ "vin" ], seizure_target, seizure_script, seizure_cblock, contract_address, json, my_offers[ json[ "offer" ] ], borrower, json[ "offer" ] ];
+                sessionStorage[ "ready_to_finish_lender" ] = JSON.stringify( ready_to_finish_lender );
+                var message_for_borrower = {
+                    msg_type: "finalize",
+                    msg: {
+                        "offer": json[ "offer" ],
+                        "utxos": utxos_for_this_transaction,
+                        "swap_sigs": my_sigs,
+                        "repay_sig": sig,
+                        "repay_addy": repayment_address,
+                    }
+                }
+                if ( lender_change ) message_for_borrower[ "msg" ][ "lender_change_address" ] = lender_change_address;
+                var encrypted = encrypt( privKey, borrower, JSON.stringify( message_for_borrower ) );
+                var offerEvent = {
+                    content: encrypted,
+                    created_at: Math.floor(Date.now() / 1000),
+                    kind: 4,
+                    tags: [ [ "p", borrower ] ],
+                    pubkey: pubKey,
+                };
+                var signedOffer = await getSignedEvent(offerEvent, privKey);
+                socket.send(JSON.stringify(['EVENT', signedOffer]));
+            }
+
+            var handleFinalize = async ( content, lender ) => {
+                var is_valid_json = isValidJson( content );
+                if ( !is_valid_json ) return;
+                json = JSON.parse( content );
+                if ( !( "offer" in json ) ) return;
+                if ( !( "swap_sigs" in json ) ) return;
+                if ( !( "repay_sig" in json ) ) return;
+                if ( !( "repay_addy" in json ) ) return;
+                if ( !( "utxos" in json ) ) return;
+                if ( json[ "offer" ].length != 64 || !isValidHex( json[ "offer" ] ) ) return;
+                if ( !( json[ "offer" ] in my_accepts ) ) return;
+                var i; for ( i=0; i<json[ "swap_sigs" ].length; i++ ) {
+                    if ( !isValidHex( json[ "swap_sigs" ][ i ] ) || json[ "swap_sigs" ][ i ].length != 128 ) return;
+                }
+                if ( !isValidHex( json[ "repay_sig" ] ) || json[ "repay_sig" ].length != 130 ) return;
+                if ( !isValidAddress( json[ "repay_addy" ] ) ) return;
+                var inputs = [];
+                var sum_of_values = 0;
+                var i; for ( i=0; i<my_accepts[ json[ "offer" ] ][ "msg" ][ "utxos" ].length; i++ ) {
+                    var utxo = my_accepts[ json[ "offer" ] ][ "msg" ][ "utxos" ][ i ];
+                    inputs.push({
+                        txid: utxo[ "txid" ],
+                        vout: utxo[ "vout" ],
+                        prevout: {
+                            value: utxo[ "value" ],
+                            scriptPubKey: tapscript.Address.toScriptPubKey( utxo[ "address" ] ),
+                        },
+                    });
+                    sum_of_values = sum_of_values + utxo[ "value" ];
+                }
+                var principle = my_accepts[ json[ "offer" ] ][ "msg" ][ "principle" ];
+                var collateral_requirement = principle * Number( ( my_accepts[ json[ "offer" ] ][ "original_offer" ][ "collateral_for_loan" ] / 100 ).toFixed( 2 ) );
+                var borrower_change = sum_of_values - collateral_requirement;
+                var sum_of_values = 0;
+                var i; for ( i=0; i<json[ "utxos" ].length; i++ ) {
+                    var utxo = json[ "utxos" ][ i ];
+                    var valid = await isUTXOValid( utxo[ "txid" ], utxo[ "vout" ], utxo[ "value" ], utxo[ "address" ], "" );
+                    if ( !valid ) return;
+                    sum_of_values = sum_of_values + utxo[ "value" ];
+                    inputs.push({
+                        txid: utxo[ "txid" ],
+                        vout: utxo[ "vout" ],
+                        prevout: {
+                            value: utxo[ "value" ],
+                            scriptPubKey: tapscript.Address.toScriptPubKey( utxo[ "address" ] ),
+                        },
+                    });
+                }
+                if ( sum_of_values < principle ) return;
+                var lender_change = sum_of_values - principle;
+                if ( lender_change && !( "lender_change_address" in json ) ) return;
+                if ( lender_change && !isValidAddress( json[ "lender_change_address" ] ) ) return;
+                var contract_address = my_accepts[ json[ "offer" ] ][ "msg" ][ "contract" ];
+                var principle_address = my_accepts[ json[ "offer" ] ][ "msg" ][ "principle_address" ];
+                var lender_change_address = json[ "lender_change_address" ];
+                var repayment_address = json[ "repay_addy" ];
+                var recovery_address = my_accepts[ json[ "offer" ] ][ "msg" ][ "recovery" ];
+                var outputs = [];
+                var txsize = 0;
+                inputs.forEach( item => txsize = txsize + 64 + 32 + 8 );
+                var num_of_outputs_to_expect = 2;
+                if ( lender_change ) num_of_outputs_to_expect = 3;
+                var i; for ( i=0; i<num_of_outputs_to_expect; i++ ) {
+                    //I calculate that outputs add 30 bytes apiece by
+                    //assuming the average scriptpubkey is 26 bytes
+                    //and assuming amounts are denoted in 4 bytes
+                    txsize = txsize + 30;
+                }
+                var fee_options = await getThreeFeeRates( "" );
+                var sats_per_byte = prompt( `Please enter a fee rate as a number. Specifically, the number of sats per byte you want to pay. The minimum rate is ${fee_options[ 0 ]}, the average rate is ${fee_options[ 1 ]}, and the urgent rate is ${fee_options[ 2 ]}.` );
+                sats_per_byte = Number( sats_per_byte );
+                if ( !sats_per_byte ) return alert( "You entered an invalid fee rate. You must enter a number greater than 0, such as 5, 10, or 25. Please try again." );
+                var mining_fee = txsize * sats_per_byte;
+                if ( mining_fee < 172 ) mining_fee = 172;
+                //this first output (vout 0) puts the collateral in the contract
+                outputs.push({
+                    value: collateral_requirement,
+                    scriptPubKey: tapscript.Address.toScriptPubKey( contract_address ),
+                });
+                var amount_for_borrower = principle;
+                if ( borrower_change ) amount_for_borrower = amount_for_borrower + borrower_change - mining_fee;
+                //this second vout (vout 1) gives the principle, and some change if necessary, to the borrower
+                outputs.push({
+                    value: amount_for_borrower,
+                    scriptPubKey: tapscript.Address.toScriptPubKey( principle_address ),
+                });
+                //this optional third vout (vout 2) gives some change, if necessary, to the lender
+                if ( lender_change ) {
+                    outputs.push({
+                        value: lender_change,
+                        scriptPubKey: tapscript.Address.toScriptPubKey( lender_change_address ),
+                    });
+                }
+                var txdata = tapscript.Tx.create({
+                    vin: inputs,
+                    vout: outputs,
+                });
+                var my_sigs = [];
+                var i; for ( i=0; i<utxos.length; i++ ) {
+                    var [ tseckey ] = tapscript.Tap.getSecKey( utxos[ i ][ "privkey" ] );
+                    my_sigs.push( tapscript.Signer.taproot.sign( tseckey, txdata, i ).hex );
+                    txdata.vin[ i ].witness = [ my_sigs[ i ] ];
+                }
+                var swap_sigs = json[ "swap_sigs" ];
+                var index_of_lender_inputs = txdata[ "vin" ].length - json[ "utxos" ].length;
+                var i; for ( i=index_of_lender_inputs; i<txdata[ "vin" ].length; i++ ) {
+                    var isValid = false;
+                    var sighash = await tapscript.Signer.taproot.hash( txdata, i );
+                    var sig = swap_sigs[ i - utxos.length ];
+                    var words = bech32.bech32m.decode( json[ "utxos" ][ i - utxos.length ][ "address" ] ).words;
+                    var segwit_version = words[ 0 ];
+                    words.splice( 0, 1 );
+                    var pubkey = bytesToHex( bech32.bech32m.fromWords( words ) );
+                    isValid = await nobleSecp256k1.schnorr.verify( sig, sighash.hex, pubkey );
+                    if ( !isValid ) return alert( `Oh no, one of your counterparty's signtures for the swap transaction was invalid! Aborting` );
+                    txdata.vin[ i ].witness = [ swap_sigs[ i - utxos.length ] ];
+                    try {
+                        var sig = swap_sigs[ i - utxos.length ];
+                        var words = bech32.bech32m.decode( json[ "utxos" ][ i - utxos.length ][ "address" ] ).words;
+                        var segwit_version = words[ 0 ];
+                        words.splice( 0, 1 );
+                        var pubkey = bytesToHex( bech32.bech32m.fromWords( words ) );
+                        isValid = await nobleSecp256k1.schnorr.verify( sig, sighash.hex, pubkey );
+                        if ( !isValid ) return alert( `Oh no, one of your counterparty's signtures for the swap transaction was invalid! Aborting` );
+                        txdata.vin[ i ].witness = [ swap_sigs[ i - utxos.length ] ];
+                    } catch( e ) {
+                        return alert( `Oh no, one of your counterparty's signatures for the swap transaction was invalid! Aborting (btw, this is the warning when there was an error in the try/catch block)` );
+                    }
+                    if ( !isValid ) return alert( `Oh no, one of your counterparty's signatures for the swap transaction was invalid! Aborting` );
+                }
+                var txhex = tapscript.Tx.encode( txdata ).hex;
+                alert( `Broadcast this txhex to start the loan:\n\n${txhex}` );
+                var txid = tapscript.Tx.util.getTxid( txhex );
+                var repayment_value = Math.round( principle * Number( `1.${my_accepts[ json[ "offer" ] ][ "original_offer" ][ "fee_to_borrow" ]}` ) );
+                //each input contributes a 64 byte signature, a 32 byte txid, a 4 byte vout, and 4 extra bytes for padding
+                var txsize = 64 + 32 + 8;
+                //each output contributes a 26 byte scriptpubkey and a 4 byte value
+                txsize = txsize + 30 * 2;
+                var mining_fee = txsize * sats_per_byte;
+                if ( mining_fee < 172 ) mining_fee = 172;
+                var repayment_txdata = tapscript.Tx.create({
+                    vin: [{
+                        txid: txid,
+                        vout: 0,
+                        prevout: {
+                            value: collateral_requirement,
+                            scriptPubKey: tapscript.Address.toScriptPubKey( contract_address ),
+                        },
+                    }],
+                    vout: [{
+                        value: repayment_value,
+                        scriptPubKey: tapscript.Address.toScriptPubKey( repayment_address ),
+                    },{
+                        value: collateral_requirement,
+                        scriptPubKey: tapscript.Address.toScriptPubKey( recovery_address ),
+                    }],
+                });
+                // var timelock = my_accepts[ json[ "offer" ] ][ "original_offer" ][ "duration_of_loan" ] * 30 * 144;
+                var timelock = 3;
+                var utxos_for_this_transaction = my_accepts[ json[ "offer" ] ][ "msg" ][ "utxos" ];
+                var scripts = [
+                    [ timelock, 'OP_CHECKSEQUENCEVERIFY', 'OP_DROP', lender, 'OP_CHECKSIG' ],
+                    [ 0, lender, 'OP_CHECKSIGADD', pubKey, 'OP_CHECKSIGADD', 2, 'OP_EQUAL' ],
+                    [ 'OP_RETURN', utxos_for_this_transaction[ 0 ][ "txid" ] + utxos_for_this_transaction[ 0 ][ "vout" ] ],
+                ];
+                var tree = scripts.map(s => tapscript.Tap.encodeScript(s));
+                var pubkey = "ab".repeat( 32 );
+                var script = scripts[ 1 ];
+                var target = tapscript.Tap.encodeScript(script);
+                var [ tpubkey, cblock ] = tapscript.Tap.getPubKey(pubkey, { tree, target });
+                var sig = tapscript.Signer.taproot.sign( privKey, repayment_txdata, 0, { extension: target } ).hex;
+                repayment_txdata.vin[ 0 ].witness = [ sig, script, cblock ];
+                var isValid = await tapscript.Signer.taproot.verify( repayment_txdata, 0, { extension: target, pubkey: pubKey });
+                if ( !isValid ) return alert( `Oh no, your signture for the repayment tx was invalid! Ask a developer for help` );
+                var lenders_sig = json[ "repay_sig" ];
+                var sighash = await tapscript.Signer.taproot.hash( repayment_txdata, 0, { extension: target, sigflag: 128 | 2 } );
+                var isValid = await nobleSecp256k1.schnorr.verify( lenders_sig.substring( 0, 128 ), sighash.hex, lender );
+                if ( !isValid ) return alert( `Oh no, your counterparty's signture for the repayment tx was invalid! Aborting` );
+                var inputs_and_outputs = [ repayment_txdata[ "vin" ], repayment_txdata[ "vout" ] ];
+                var current_blockheight = await getBlockheight( "" );
+                var block_to_broadcast_in = current_blockheight + timelock;
+                if ( !( String( block_to_broadcast_in ) in ready_to_finish ) ) ready_to_finish[ String( block_to_broadcast_in ) ] = [];
+                ready_to_finish[ String( block_to_broadcast_in ) ].push( inputs_and_outputs, my_accepts[ json[ "offer" ] ], lender, lenders_sig );
+                sessionStorage[ "ready_to_finish" ] = JSON.stringify( ready_to_finish );
+            }
+
+            function isValidJson( content ) {
+                if ( !content ) return;
+                try {  
+                    var json = JSON.parse( content );
+                } catch ( e ) {
+                    return;
+                }
+                return true;
+            }
+
+            function isValidHex( h ) {
+                if ( !h ) return;
+                var length = h.length;
+                if ( length % 2 ) return;
+                try {
+                    var a = BigInt( "0x" + h, "hex" );
+                } catch( e ) {
+                    return;
+                }
+                var unpadded = a.toString( 16 );
+                var padding = [];
+                var i; for ( i=0; i<length; i++ ) padding.push( 0 );
+                padding = padding.join( "" );
+                padding = padding + unpadded.toString();
+                padding = padding.slice( -Math.abs( length ) );
+                return ( padding === h );
+            }
+
+            function isValidAddress( address ) {
+                try{
+                    return !!tapscript.Address.decode( address ).script;
+                } catch( e ) {return;}
+                return;
+            }
+
+            async function isUTXOValid( txid, vout, value, address, network ) {
+                var txinfo = await getData( `https://mutinynet.com/${network}api/tx/${txid}` );
+                txinfo = JSON.parse( txinfo );
+                if ( txinfo[ "vout" ][ vout ][ "value" ] == value && txinfo[ "vout" ][ vout ][ "scriptpubkey_address" ] == address ) return true;
+                return;
+            }
+
+            async function getBlockheight( network ) {
+                var data = await getData( `https://mutinynet.com/${network}api/blocks/tip/height` );
+                return Number( data );
+            }
+
+            var purgeOldContracts = async () => {
+                $$( '.offer' ).forEach( item => {
+                    var now = Math.floor( Date.now() / 1000 );
+                    var now_minus_ten = now - 600;
+                    if ( Number( item.getAttribute( "data-timestamp" ) ) < now_minus_ten ) item.parentElement.remove();
+                });
+                Object.keys( ready_to_finish ).forEach( async ( item, index ) => {
+                    var contract = ready_to_finish[ item ][ 1 ][ "msg" ][ "contract" ];
+                    //check if address sent money
+                    var contract_is_fulfilled = await addressOnceSentMoney( contract, "" );
+                    if ( contract_is_fulfilled ) {
+                        delete ready_to_finish[ item ];
+                        sessionStorage[ "ready_to_finish" ] = JSON.stringify( ready_to_finish );
+                    }
+                });
+                Object.keys( ready_to_finish_lender ).forEach( async ( item, index ) => {
+                    var contract = ready_to_finish_lender[ item ][ 5 ];
+                    //check if address sent money
+                    var contract_is_fulfilled = await addressOnceSentMoney( contract, "" );
+                    if ( contract_is_fulfilled ) {
+                        delete ready_to_finish_lender[ item ];
+                        sessionStorage[ "ready_to_finish_lender" ] = JSON.stringify( ready_to_finish_lender );
+                    }
+                });
+            }
+
+            async function addressOnceSentMoney( address, network ) {
+                var nonjson = await getData( "https://mutinynet.com/" + network + "api/address/" + address );
+                var json = JSON.parse( nonjson );
+                if ( json[ "chain_stats" ][ "spent_txo_count" ] > 0 || json[ "mempool_stats" ][ "spent_txo_count" ] > 0 ) {
+                    return true;
+                }
+                return false;
+            }
+
+            var displayActiveContracts = async () => {
+                console.log( 'ran' );
+                if ( Object.keys( ready_to_finish ).length ) $( '.active_contracts_div' ).classList.remove( "hidden" );
+                else {
+                    $( '.active_contracts' ).innerHTML = "";
+                    $( '.active_contracts_div' ).classList.add( "hidden" );
+                }
+                var i; for ( i=0; i<Object.keys( ready_to_finish ).length; i++ ) {
+                    var item = Object.keys( ready_to_finish )[ i ];
+                    var contract = ready_to_finish[ item ][ 1 ][ "msg" ][ "contract" ];
+                    var principle = ready_to_finish[ item ][ 1 ][ "msg" ][ "principle" ];
+                    var fee_to_borrow = ready_to_finish[ item ][ 1 ][ "original_offer" ][ "fee_to_borrow" ];
+                    var duration_of_loan = ready_to_finish[ item ][ 1 ][ "original_offer" ][ "duration_of_loan" ];
+                    var repayment_value = Math.round( principle * Number( `1.${fee_to_borrow}` ) );
+                    var my_balance = await getBalanceFromUtxos( utxos );
+                    var enough_or_not = "";
+                    var pay_it_off = "";
+                    var utxos_for_this_transaction = ready_to_finish[ item ][ 1 ][ "msg" ][ "utxos" ];
+                    if ( repayment_value > my_balance ) enough_or_not = "not ";
+                    else pay_it_off = `-- <span class="pay_it_off" data-ins_and_outs="${textToHex( JSON.stringify( ready_to_finish[ item ][ 0 ] ) )}" data-lender="${ready_to_finish[ item ][ 2 ]}" data-lenders_sig="${ready_to_finish[ item ][ 3 ]}" data-custom_utxo="${utxos_for_this_transaction[ 0 ][ "txid" ] + utxos_for_this_transaction[ 0 ][ "vout" ]}" data-duration_of_loan="${duration_of_loan}" style="color: blue; text-decoration: underline; cursor: pointer;">Pay it off</span>`;
+                    var current_blockheight = await getBlockheight( "" );
+                    var time_left = Number( item ) - current_blockheight;
+                    var block_or_blocks = "blocks";
+                    if ( time_left == 1 ) block_or_blocks = "block";
+                    if ( time_left < 1 ) time_left = 0;
+                    var html = ``;
+                    html = html + `<p>Contract: ${contract}</p>`;
+                    html = html + `<p>Principle: ${principle} sats</p>`;
+                    html = html + `<p>Fee to borrow: ${fee_to_borrow}%</p>`;
+                    html = html + `<p>You must repay: ${repayment_value} sats</p>`;
+                    html = html + `<p>You have: ${my_balance} sats, which is ${enough_or_not}enough ${pay_it_off}</p>`;
+                    html = html + `<p>Repay before this block: block ${item}</p>`;
+                    html = html + `<p>Current block: block ${current_blockheight}</p>`;
+                    html = html + `<p>Time left: ${time_left} ${block_or_blocks}</p>`;
+                    if ( !i ) $( '.active_contracts' ).innerHTML = "";
+                    var div = document.createElement( "div" );
+                    div.classList.add( "active_contract" );
+                    div.classList.add( "bordered" );
+                    div.innerHTML = html;
+                    $( '.active_contracts' ).append( div );
+                }
+                $$( '.pay_it_off' ).forEach( item => {
+                    item.onclick = async e => {
+                        var ins_and_outs = JSON.parse( hexToText( e.target.getAttribute( "data-ins_and_outs" ) ) );
+                        var lender = e.target.getAttribute( "data-lender" );
+                        var lenders_sig = e.target.getAttribute( "data-lenders_sig" );
+                        var custom_utxo = e.target.getAttribute( "data-custom_utxo" );
+                        var duration_of_loan = e.target.getAttribute( "data-duration_of_loan" );
+                        var inputs = ins_and_outs[ 0 ];
+                        var outputs = ins_and_outs[ 1 ];
+                        var i; for ( i=0; i<utxos.length; i++ ) {
+                            var utxo = utxos[ i ];
+                            inputs.push({
+                                txid: utxo[ "tx_id" ],
+                                vout: utxo[ "output_number" ],
+                                prevout: {
+                                    value: utxo[ "amount" ],
+                                    scriptPubKey: tapscript.Address.toScriptPubKey( utxo[ "address" ] ),
+                                },
+                            });
+                        }
+                        var sum_of_values = 0;
+                        inputs.forEach( item => sum_of_values = sum_of_values + item[ "prevout" ][ "value" ] );
+                        outputs[ 1 ][ "value" ] = sum_of_values - outputs[ 0 ][ "value" ] - 500;
+                        var repayment_txdata = tapscript.Tx.create({
+                            vin: inputs,
+                            vout: outputs,
+                        });
+                        // var timelock = duration_of_loan * 30 * 144;
+                        var timelock = 3;
+                        var scripts = [
+                            [ timelock, 'OP_CHECKSEQUENCEVERIFY', 'OP_DROP', lender, 'OP_CHECKSIG' ],
+                            [ 0, lender, 'OP_CHECKSIGADD', pubKey, 'OP_CHECKSIGADD', 2, 'OP_EQUAL' ],
+                            [ 'OP_RETURN', custom_utxo ],
+                        ];
+                        var tree = scripts.map(s => tapscript.Tap.encodeScript(s));
+                        var pubkey = "ab".repeat( 32 );
+                        var script = scripts[ 1 ];
+                        var target = tapscript.Tap.encodeScript(script);
+                        var [ tpubkey, cblock ] = tapscript.Tap.getPubKey(pubkey, { tree, target });
+                        var sig = tapscript.Signer.taproot.sign( privKey, repayment_txdata, 0, { extension: target } ).hex;
+                        repayment_txdata.vin[ 0 ].witness = [ sig, lenders_sig, script, cblock ];
+                        var sighash = await tapscript.Signer.taproot.hash( repayment_txdata, 0, { extension: target } );
+                        var isValid = await nobleSecp256k1.schnorr.verify( sig, sighash.hex, pubKey );
+                        if ( !isValid ) return alert( `Oh no, your signture for the repayment tx was invalid! Ask a developer for help` );
+                        var my_sigs = [];
+                        var i; for ( i=0; i<utxos.length; i++ ) {
+                            var [ tseckey ] = tapscript.Tap.getSecKey( utxos[ i ][ "privkey" ] );
+                            my_sigs.push( tapscript.Signer.taproot.sign( tseckey, repayment_txdata, i + 1 ).hex );
+                            repayment_txdata.vin[ i + 1 ].witness = [ my_sigs[ i ] ];
+                        }
+                        var txhex = tapscript.Tx.encode( repayment_txdata ).hex;
+                        alert( `Broadcast this txhex:\n\n${txhex}` );
+                    }
+                });
+            }
+
+            function textToHex( text ) {
+                var encoder = new TextEncoder().encode( text );
+                return [...new Uint8Array(encoder)]
+                    .map( x => x.toString( 16 ).padStart( 2, "0" ) )
+                    .join( "" );
+            }
+
+            function hexToText( hex ) {
+                var bytes = new Uint8Array(Math.ceil(hex.length / 2));
+                for (var i = 0; i < hex.length; i++) bytes[i] = parseInt(hex.substr(i * 2, 2), 16);
+                var text = new TextDecoder().decode( bytes );
+                return text;
+            }
+
+            var displayActiveContractsLender = async () => {
+                if ( Object.keys( ready_to_finish_lender ).length ) $( '.active_contracts_lender_div' ).classList.remove( "hidden" );
+                else {
+                    $( '.active_contracts_lender' ).innerHTML = "";
+                    $( '.active_contracts_lender_div' ).classList.add( "hidden" );
+                }
+                var i; for ( i=0; i<Object.keys( ready_to_finish_lender ).length; i++ ) {
+                    var item = Object.keys( ready_to_finish_lender )[ i ];
+                    var contract = ready_to_finish_lender[ item ][ 5 ];
+                    var accept_msg = ready_to_finish_lender[ item ][ 6 ];
+                    var original_offer = ready_to_finish_lender[ item ][ 7 ];
+                    var borrower = ready_to_finish_lender[ item ][ 8 ];
+                    var original_offer_id = ready_to_finish_lender[ item ][ 9 ];
+                    var principle = accept_msg[ "principle" ];
+                    var timelock = ready_to_finish_lender[ item ][ 0 ];
+                    try {
+                        var fee_to_borrow = original_offer[ "fee_to_borrow" ];
+                    } catch( e ) {
+                        $( '.active_contracts_lender' ).innerHTML = "";
+                        $( '.active_contracts_lender_div' ).classList.add( "hidden" );
+                        if ( original_offer_id ) return alert( `Someone tried to take one of your offers but you got rid of it -- this one: ${original_offer_id}` );
+                        if ( !my_offers.length ) 
+                        return alert( `not done yet` );
+                    }
+                    var duration_of_loan = original_offer[ "duration_of_loan" ];
+                    var collateral_for_loan = original_offer[ "collateral_for_loan" ];
+                    var collateral_requirement = principle * Number( ( collateral_for_loan / 100 ).toFixed( 2 ) );
+                    var repayment_value = Math.round( principle * Number( `1.${fee_to_borrow}` ) );
+                    var my_balance = await getBalanceFromUtxos( utxos );
+                    var current_blockheight = await getBlockheight( "" );
+                    var txinfo = await addressReceivedMoneyInThisTx( contract, "" );
+                    //TODO: if, after several minutes, the borrower hasn't started the loan,
+                    //advise the lender to move his funds
+                    if ( !txinfo[ 0 ] ) return;
+                    var blocks_since_confirmed = await howManyConfs( txinfo[ 0 ], "" );
+                    var current_blockheight = await getBlockheight( "" );
+                    var time_left = ( ( current_blockheight - blocks_since_confirmed ) + timelock ) - current_blockheight;
+                    console.log( "time left:", time_left, "current_blockheight:", current_blockheight, "blocks_since_confirmed:", blocks_since_confirmed, "current_blockheight - blocks_since_confirmed:", current_blockheight - blocks_since_confirmed, "timelock:", timelock, "( current_blockheight - blocks_since_confirmed ) + timelock:", time_left );
+                    var real_time_left = Number( String( time_left ) );
+                    var block_or_blocks = "blocks";
+                    if ( time_left == 1 ) block_or_blocks = "block";
+                    if ( time_left < 1 ) time_left = 0;
+                    var utxos_for_this_transaction = accept_msg[ "utxos" ];
+                    var html = ``;
+                    html = html + `<p>Contract: ${contract}</p>`;
+                    html = html + `<p>Principle: ${principle} sats</p>`;
+                    html = html + `<p>Fee you'll earn: ${fee_to_borrow}%</p>`;
+                    html = html + `<p>Or you'll get: ${collateral_requirement} sats (if the borrower fails to pay)</p>`;
+                    html = html + `<p>You currently have: ${my_balance} sats</p>`;
+                    html = html + `<p>You will have: ${my_balance + repayment_value} sats</p>`;
+                    html = html + `<p>Or: ${my_balance + collateral_requirement} sats (if the borrower fails to pay)</p>`;
+                    html = html + `<p>When payment is due: block ${current_blockheight + real_time_left}</p>`;
+                    html = html + `<p>Current block: block ${current_blockheight}</p>`;
+                    html = html + `<p>Time til then: ${time_left} ${block_or_blocks}</p>`;
+                    if ( !( item in ready_to_finish_lender ) ) return;
+                    if ( !time_left ) html = html + `<p>Time's up! <span class="take_collateral" data-vin="${textToHex( JSON.stringify( ready_to_finish_lender[ item ][ 1 ] ) )}" data-borrower="${borrower}" data-custom_utxo="${utxos_for_this_transaction[ 0 ][ "txid" ] + utxos_for_this_transaction[ 0 ][ "vout" ]}" data-timelock="${timelock}" data-target="${ready_to_finish_lender[ item ][ 2 ]}" data-script="${textToHex( JSON.stringify( ready_to_finish_lender[ item ][ 3 ] ) )}" data-cblock="${ready_to_finish_lender[ item ][ 4 ]}" style="color: blue; text-decoration: underline; cursor: pointer;">Take the collateral</span></p>`;
+                    if ( !i ) $( '.active_contracts_lender' ).innerHTML = "";
+                    var div = document.createElement( "div" );
+                    div.classList.add( "active_contract_lender" );
+                    div.classList.add( "bordered" );
+                    div.innerHTML = html;
+                    $( '.active_contracts_lender' ).append( div );
+                }
+                $$( '.take_collateral' ).forEach( item => {
+                    item.onclick = async e => {
+                        var inputs = JSON.parse( hexToText( e.target.getAttribute( "data-vin" ) ) );
+                        var borrower = e.target.getAttribute( "data-borrower" );
+                        var custom_utxo = e.target.getAttribute( "data-custom_utxo" );
+                        var timelock = e.target.getAttribute( "data-timelock" );
+                        var target = e.target.getAttribute( "data-target" );
+                        var script = JSON.parse( hexToText( e.target.getAttribute( "data-script" ) ) );
+                        var cblock = e.target.getAttribute( "data-cblock" );
+                        var outputs = [];
+                        var sum_of_values = 0;
+                        inputs.forEach( item => sum_of_values = sum_of_values + item[ "prevout" ][ "value" ] );
+                        var backup_words = sessionStorage[ "backup_words" ];
+                        var change_address = await getFirstUnusedChangeAddress( backup_words, "testnet/" );
+                        var outputs = [{
+                            value: sum_of_values - 500,
+                            scriptPubKey: tapscript.Address.toScriptPubKey( change_address ),
+                        }];
+                        var seizure_txdata = tapscript.Tx.create({
+                            vin: inputs,
+                            vout: outputs,
+                        });
+                        var scripts = [
+                            [ timelock, 'OP_CHECKSEQUENCEVERIFY', 'OP_DROP', pubKey, 'OP_CHECKSIG' ],
+                            [ 0, pubKey, 'OP_CHECKSIGADD', borrower, 'OP_CHECKSIGADD', 2, 'OP_EQUAL' ],
+                            [ 'OP_RETURN', custom_utxo ],
+                        ];
+                        var tree = scripts.map(s => tapscript.Tap.encodeScript(s));
+                        var pubkey = "ab".repeat( 32 );
+                        var [ tpubkey ] = tapscript.Tap.getPubKey(pubkey, { tree });
+                        var sig = tapscript.Signer.taproot.sign( privKey, seizure_txdata, 0, { extension: target } ).hex;
+                        seizure_txdata.vin[ 0 ].witness = [ sig, script, cblock ];
+                        var sighash = await tapscript.Signer.taproot.hash( seizure_txdata, 0, { extension: target } );
+                        var isValid = await nobleSecp256k1.schnorr.verify( sig, sighash.hex, pubKey );
+                        if ( !isValid ) return alert( `Oh no, your signture for the repayment tx was invalid! Ask a developer for help` );
+                        var txhex = tapscript.Tx.encode( seizure_txdata ).hex;
+                        alert( `Broadcast this txhex:\n\n${txhex}` );
+                    }
+                });
+            }
+
+            async function howManyConfs( txid, network ) {
+                var blockheight = await getBlockheight( network );
+                return new Promise( function( resolve, reject ) {
+                    var xhttp = new XMLHttpRequest();
+                    xhttp.onreadystatechange = function() {
+                        if ( this.readyState == 4 && ( this.status > 199 && this.status < 300 ) ) {
+                            var json = JSON.parse( xhttp.responseText );
+                            if ( json[ "status" ][ "confirmed" ] ) {
+                                resolve( ( Number( blockheight ) - Number( json[ "status" ][ "block_height" ] ) ) + 1 );
+                            } else {
+                                resolve( "0".toString() );
+                            }
+                        } else {
+                            if ( this.status > 399 ) {
+                                resolve( "ejected from mempool" );
+                            }
+                        }
+                    };
+                    xhttp.open( "GET", `https://mutinynet.com/${network}api/tx/` + txid, true );
+                    xhttp.send();
+                });
+            }
+
+            async function addressReceivedMoneyInThisTx( address, network ) {
+                var txid;
+                var vout;
+                var amt;
+                var nonjson = await getData( "https://mutinynet.com/" + network + "api/address/" + address + "/txs" );
+                var json = JSON.parse( nonjson);
+                json.forEach( tx => {
+                    tx["vout"].forEach( ( output, index ) => {
+                        if ( output[ "scriptpubkey_address" ] == address ) {
+                            txid = tx[ "txid" ];
+                            vout = index;
+                            amt = output[ "value" ];
+                        }
+                    });
+                });
+                return [txid, vout, amt];
+            }
+
+        </script>
+        <script>
+            var { getSharedSecret, schnorr, utils } = nobleSecp256k1;
+            var relay = "wss://nostrue.com";
+            var privKey, pubKey;
+            async function getSignedEvent(event, privateKey) {
+                var eventData = JSON.stringify([
+                    0,                  // Reserved for future use
+                    event['pubkey'],        // The sender's public key
+                    event['created_at'],    // Unix timestamp
+                    event['kind'],      // Message “kind” or type
+                    event['tags'],      // Tags identify replies/recipients
+                    event['content']        // Your note contents
+                ])
+                event.id  = SHA256( eventData );
+                event.sig = await schnorr.sign( event.id, privateKey );
+                return event;
+            }
+            function encrypt( privkey, pubkey, text ) {
+                var key = nobleSecp256k1.getSharedSecret( privkey, '02' + pubkey, true ).substring( 2 );
+                var iv = window.crypto.getRandomValues(new Uint8Array(16));
+                var cipher = browserifyCipher.createCipheriv( 'aes-256-cbc', hexToBytes( key ), iv );
+                var encryptedMessage = cipher.update(text,"utf8","base64");
+                emsg = encryptedMessage + cipher.final( "base64" );
+                var uint8View = new Uint8Array( iv.buffer );
+                var decoder = new TextDecoder();
+                return emsg + "?iv=" + btoa( String.fromCharCode.apply( null, uint8View ) );
+            }
+            function decrypt( privkey, pubkey, ciphertext ) {
+                var [ emsg, iv ] = ciphertext.split( "?iv=" );
+                var key = nobleSecp256k1.getSharedSecret( privkey, '02' + pubkey, true ).substring( 2 );
+                var decipher = browserifyCipher.createDecipheriv(
+                    'aes-256-cbc',
+                    hexToBytes( key ),
+                    hexToBytes( base64ToHex( iv ) )
+                );
+                var decryptedMessage = decipher.update( emsg, "base64" );
+                dmsg = decryptedMessage + decipher.final( "utf8" );
+                return dmsg;
+            }
+        </script>
+    </head>
+    <body>
+        <h1>Welcome to loan shark</h1>
+        <div class="homepage">
+            <div class="login_buttons">
+                <button class="new_account">New account</button>
+                <button class="login">Log in</button>
+                <button class="logout hidden">Log out</button>
+                <button class="manage_wallet hidden">Manage wallet</button>
+                <button class="new_loan hidden">New loan</button>
+            </div>
+            <h2>Loan offers</h2>
+            <div class="orderbook">
+                <p class="nothing_in_orderbook">None yet</p>
+            </div>
+            <div class="active_contracts_div hidden">
+                <h2>Contracts where you are an active borrower</h2>
+                <div class="active_contracts"></div>
+            </div>
+            <div class="active_contracts_lender_div hidden">
+                <h2>Contracts where you are an active lender</h2>
+                <div class="active_contracts_lender"></div>
+            </div>
+        </div>
+        <div class="wallet hidden">
+            <p class="balance_p">Balance: <span class="balance">loading...</span></p>
+            <div class="send_and_receive_buttons">
+                <button class="home">Home</button>
+                <button class="send">Send</button>
+                <button class="receive">Receive</button>
+            </div>
+        </div>
+        <div class="new_loan_page hidden">
+            <p><button class="home">Home</button></p>
+            <p>
+                What is the minimum amount you want to lend? (in sats) Your offer will be a range between your minimum (chosen here) and a maximum (however much you have in your wallet).
+            </p>
+            <div class="min_to_lend">
+                <input type="number" value="546" step="1">
+            </div>
+            <p>
+                Name your fee (as a percentage)
+            </p>
+            <p><input class="fee_to_borrow" type="number" value="10" step="1" min="0" max="100"></p>
+            <p>
+                How much collateral must your counterparty post? (as a percentage)
+            </p>
+            <p><input class="collateral_for_loan" type="number" value="200" step="1" min="1" max="1000"></p>
+            <p>
+                How long should the loan last?
+                <select class="duration_of_loan">
+                    <option>3 months</option>
+                    <option>6 months</option>
+                    <option>12 months</option>
+                </select>
+            </p>
+            <p>
+                Keep offer private?
+                <input class="privacy_switch" type="checkbox">
+            </p>
+            <p><button class="submit_loan_offer">Submit</button></p>
+        </div>
+        <script>
+            $( '.submit_loan_offer' ).onclick = async () => {
+                var btc_holdings = 0;
+                utxos.forEach(  utxo => btc_holdings = btc_holdings + utxo[ "amount" ] );
+                var offer = {}
+                offer[ "duration_of_loan" ] = Number( $( '.new_loan_page .duration_of_loan' ).value.split( " " )[ 0 ] );
+                offer[ "fee_to_borrow" ] = Number( $( '.new_loan_page .fee_to_borrow' ).value );
+                offer[ "min_to_lend" ] = Number( $( '.new_loan_page .min_to_lend input' ).value );
+                offer[ "max_to_lend" ] = btc_holdings;
+                offer[ "collateral_for_loan" ] = Number( $( '.new_loan_page .collateral_for_loan' ).value );
+                $( '.home' ).click();
+                var offerEvent = {
+                    content: JSON.stringify(offer),
+                    created_at: Math.floor(Date.now() / 1000),
+                    kind: 10062,
+                    tags: [],
+                    pubkey: pubKey,
+                };
+                var signedOffer = await getSignedEvent(offerEvent, privKey);
+                socket.send(JSON.stringify(['EVENT', signedOffer]));
+                offer[ "timestamp" ] = Math.floor(Date.now() / 1000);
+                my_offers[ signedOffer.id ] = offer;
+                sessionStorage[ "my_offers" ] = JSON.stringify( my_offers );
+            }
+            $( '.login' ).onclick = () => {
+                var backup_words = sessionStorage[ "backup_words" ];
+                if ( !backup_words ) backup_words = prompt( 'Enter your 12 words' );
+                if ( !backup_words ) return;
+                if ( !bip39.validateMnemonic( backup_words ) ) return alert( `Your backup words are invalid, try again` );
+                sessionStorage[ "backup_words" ] = backup_words;
+                var xprv = getXprvFromWords( backup_words, "44'" );
+                var keypair = getKeypairFromXprv( xprv, 0 );
+                privKey = keypair[ 0 ];
+                pubKey = keypair[ 1 ].substring( 2 );
+                try {
+                    socket = new WebSocket( relay );
+                } catch ( e ) {}
+                socket.addEventListener('message', async message => {
+                    var [ type, subId, event ] = JSON.parse( message.data );
+                    var { kind, content } = event || {}
+                    if ( !event || event === true ) return;
+                    if ( messages_handled.includes( event.id ) ) return;
+                    messages_handled.push( event.id );
+                    if ( kind === 4 ) content = await decrypt(privKey, event.pubkey, content);
+                    if ( kind === 10062 ) return handle10062( event );
+                    if ( kind === 4 ) return handle4( content, event.pubkey );
+                    else console.log('content:', content);
+                });
+                socket.addEventListener('open', async e => {
+                    console.log( "connected to " + relay );
+                    var timestamp = Math.floor( Date.now() / 1000 );
+                    var timeMinusTen = timestamp - 600;
+                    var subId   = bytesToHex( nobleSecp256k1.utils.randomPrivateKey() ).substring( 0, 16 );
+                    var filter1  = { "#p": [ pubKey ], since: timeMinusTen }
+                    var filter2  = { "kinds": [ 10062 ], since: timeMinusTen }
+                    var subscription = [ "REQ", subId, filter1, filter2 ];
+                    socket.send(JSON.stringify( subscription ));
+                });
+                $( '.login' ).classList.add( "hidden" );
+                $( '.logout' ).classList.remove( "hidden" );
+                $( '.manage_wallet' ).classList.remove( "hidden" );
+                $( '.new_loan' ).classList.remove( "hidden" );
+            }
+            $( '.logout' ).onclick = () => {
+                $( '.login' ).classList.remove( "hidden" );
+                $( '.logout' ).classList.add( "hidden" );
+                $( '.manage_wallet' ).classList.add( "hidden" );
+                $( '.new_loan' ).classList.add( "hidden" );
+                sessionStorage.clear();
+                utxos = [];
+                utxos_loaded = false;
+                $( '.balance' ).innerText = `loading...`;
+            }
+            $( '.new_account' ).onclick = () => {
+                var backup_words = sessionStorage[ "backup_words" ];
+                if ( backup_words ) return alert( `You already have an account and you are logged in. Log out to make a new one` );
+                sessionStorage[ "backup_words" ] = generateWords();
+                var backup_words = sessionStorage[ "backup_words" ];
+                alert( `Save your private keys or you will lose your money:\n\n${backup_words}` );
+                alert( `Congratulations, your account is ready and you are logged in` );
+                $( '.login' ).click();
+            }
+            $( '.manage_wallet' ).onclick = () => hider( 'wallet' );
+            $$( '.home' ).forEach( item => {
+                item.onclick = () => hider( 'homepage' );
+            });
+            $( '.send' ).onclick = async () => {
+                var destino = prompt( "Please enter the bitcoin address where you want to send the money" );
+                var amt = prompt( "Please enter whatever amount you want to send there" );
+                amt = Number( amt );
+                var fee_options = await getThreeFeeRates( "" );
+                var sats_per_byte = prompt( `Please enter a fee rate as a number. Specifically, the number of sats per byte you want to pay. The minimum rate is ${fee_options[ 0 ]}, the average rate is ${fee_options[ 1 ]}, and the urgent rate is ${fee_options[ 2 ]}.` );
+                sats_per_byte = Number( sats_per_byte );
+                if ( !sats_per_byte ) return alert( "You entered an invalid fee rate. You must enter a number greater than 0, such as 5, 10, or 25. Please try again." );
+                spendCoins( destino, amt, sats_per_byte, "testnet/" );
+            }
+            $( '.receive' ).onclick = async () => {
+                var backup_words = sessionStorage[ "backup_words" ];
+                if ( !backup_words ) return;
+                var first_unused = await getFirstUnusedReceiveAddress( backup_words, "testnet/" );
+                alert( first_unused );
+            }
+            $( '.new_loan' ).onclick = () => hider( 'new_loan_page' );
+            init();
+        </script>
+    </body>
+</html>
