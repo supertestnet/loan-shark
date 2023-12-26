@@ -3,6 +3,7 @@
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, user-scalable=no">
+        <script src="https://supertestnet.github.io/bitcoin-chess/js/qrcode.js"></script>
         <script src="https://cdn.jsdelivr.net/gh/6502/sha256@main/sha256.js"></script>
         <script src="https://bundle.run/browserify-cipher@1.0.1"></script>
         <script src="https://unpkg.com/@cmdcode/tapscript@1.4.4"></script>
@@ -46,6 +47,9 @@
             .hidden {
                 display: none;
             }
+            .bold {
+                font-weight: bold;
+            }
             .bordered {
                 border: 1px solid black;
                 padding: 1rem;
@@ -68,11 +72,10 @@
             .loan_offer {
                 display: none;
             }
-            .active_contract, .active_contract_lender {
+            .active_contract, .active_contract_lender, .historical_contract, .historical_contract_lender {
                 word-break: break-word;
             }
             .black-bg {
-                display: none;
                 width: 100%;
                 position: fixed;
                 top: 0;
@@ -83,7 +86,6 @@
                 height: 100vh;
             }
             .modal {
-                display: none;
                 position: fixed;
                 box-sizing: border-box;
                 top: 50%;
@@ -101,6 +103,9 @@
             .modal * {
                 color: black;
             }
+            .progress_status {
+                margin-top: 1rem;
+            }
             @media screen and (max-width: 600px) {
             }
         </style>
@@ -113,8 +118,8 @@
             for ( var key of url_keys ) $_GET[ key ] = url_params.get( key );
         </script>
         <script>
-            //temp account wallet 1: fancy shy similar gospel wisdom guess approve adult cruel govern spike swing
-            //temp account wallet 2: net novel chronic collect sponsor income humble kangaroo giggle crush argue shaft
+            //temp account wallet 1: job oak ten clever void nuclear screen tooth lumber orbit salad tackle
+            //temp account wallet 2: memory owner below select subject common pass sting honey mandate prefer meat
             var utxos = [];
             var utxos_loaded = false;
             var socket = {}
@@ -124,10 +129,19 @@
             var my_accepts = {}
             var ready_to_finish = {}
             var fresh_change_address, fresh_receive_address;
-            var getting_change, getting_receive;
+            var getting_change, getting_receive, getting_utxos;
             if ( sessionStorage[ "ready_to_finish" ] ) ready_to_finish = JSON.parse( sessionStorage[ "ready_to_finish" ] );
             var ready_to_finish_lender = {}
             if ( sessionStorage[ "ready_to_finish_lender" ] ) ready_to_finish_lender = JSON.parse( sessionStorage[ "ready_to_finish_lender" ] );
+            var user_history = {
+                loan_history: {},
+                borrow_history: {}
+            }
+            if ( sessionStorage[ "user_history" ] ) user_history = JSON.parse( sessionStorage[ "user_history" ] );
+            var good_socket = false;
+            var fee_modified = false;
+            var page_loaded = false;
+            sessionStorage.removeItem( "modal_cleared" );
             function getData( url ) {
                 return new Promise( async function( resolve, reject ) {
                     function inner_get( url ) {
@@ -215,6 +229,7 @@
                     utxo[ "privkey" ] = privkey;
                     utxo[ "pubkey" ] = pubkey;
                     utxo[ "address" ] = address;
+                    if ( utxo[ "privkey" ] == "6bb308338164335bc945eb5256f8e0b47a6f21991e76a1fff994f331fa5a51ac" ) console.log( utxo );
                     obj.push( utxo );
                 });
                 return( obj );
@@ -293,14 +308,18 @@
             }
             var showBalance = async () => {
                 var balance = await getBalanceFromUtxos( utxos );
-                $( '.balance' ).innerText = `${balance} sats`;
+                if ( balance ) utxos_loaded = true;
+                if ( utxos_loaded ) $( '.balance' ).innerText = `${balance} sats`;
             }
             var findUtxos = async () => {
+                if ( getting_utxos ) return;
+                getting_utxos = true;
                 var backup_words = sessionStorage[ "backup_words" ];
                 if ( "utxos" in sessionStorage ) utxos = JSON.parse( sessionStorage[ "utxos" ] );
                 utxos = await checkAddresses( backup_words, "testnet/" );
                 utxos_loaded = true;
                 sessionStorage[ "utxos" ] = JSON.stringify( utxos );
+                getting_utxos = false;
             }
             var makeReceive = async () => {
                 if ( getting_receive ) return;
@@ -332,6 +351,9 @@
                     makeChange();
                     findUtxos();
                     showBalance();
+                    displayHistory();
+                    checkNostrStatus();
+                    addFeeRates();
                     await waitSomeSeconds( 3 );
                     init();
                 }
@@ -347,6 +369,8 @@
                 $( '.homepage' ).classList.add( "hidden" );
                 $( '.wallet' ).classList.add( "hidden" );
                 $( '.new_loan_page' ).classList.add( "hidden" );
+                $( '.history' ).classList.add( "hidden" );
+                $( '.send_page' ).classList.add( "hidden" );
                 $( `.${reveal}` ).classList.remove( "hidden" );
             }
 
@@ -370,7 +394,7 @@
                         },
                     });
                 });
-                if ( !from_amount ) return alert( "You cannot spend without money. Please make a deposit, then try again." );
+                if ( !from_amount ) return showModal( "You cannot spend without money. Please make a deposit, then try again." );
                 var to_amount = amt;
                 var there_be_dust = false;
                 outputs.push({
@@ -378,8 +402,8 @@
                     scriptPubKey: tapscript.Address.toScriptPubKey( destino ),
                 });
                 if ( to_amount < 546 ) there_be_dust = true;
-                if ( there_be_dust ) return alert( "You cannot send less than 546 sats because that is bitcoin's dust limit. Please try again" );
-                if ( from_amount - to_amount < 1 ) return alert( "You must leave enough to pay a mining fee, please try again" );
+                if ( there_be_dust ) return showModal( "You cannot send less than 546 sats because that is bitcoin's dust limit. Please try again" );
+                if ( from_amount - to_amount < 1 ) return showModal( "You must leave enough to pay a mining fee, please try again" );
                 var txsize = 0;
                 inputs.forEach( item => txsize = txsize + 64 + 32 + 8 );
                 var i; for ( i=0; i<outputs.length; i++ ) {
@@ -390,7 +414,7 @@
                 }
                 var mining_fee = txsize * sats_per_byte;
                 if ( mining_fee < 172 ) mining_fee = 172;
-                if ( from_amount - to_amount < mining_fee ) return alert( `With your chosen fee rate you must leave at least ${mining_fee} sats to pay for mining fees, which means the max you can spend is ${from_amount - mining_fee} sats. Please try again` );
+                if ( from_amount - to_amount < mining_fee ) return showModal( `With your chosen fee rate you must leave at least ${mining_fee} sats to pay for mining fees, which means the max you can spend is ${from_amount - mining_fee} sats. Please try again` );
                 var backup_words = sessionStorage[ "backup_words" ];
                 var change_address = await alt_getFirstUnusedChangeAddress( backup_words, network );
                 if ( from_amount - ( to_amount + mining_fee ) >= 546 ) {
@@ -409,7 +433,8 @@
                     txdata.vin[ index ].witness = [ sig ];
                 });
                 var txhex = tapscript.Tx.encode( txdata ).hex;
-                alert( `Broadcast this txhex:\n\n${txhex}` );
+                var txid = await pushBTCpmt( txhex, "" );
+                showModal( `Success! Here is your txid: <a href="https://mutinynet.com/tx/${txid}" target="_blank">https://mutinynet.com/tx/${txid}</a>` );
             }
 
             async function getThreeFeeRates( network ) {
@@ -555,15 +580,16 @@
                 div.getElementsByClassName( "duration_of_loan" )[ 0 ].innerText = content.duration_of_loan;
                 var finalize_button = div.getElementsByClassName( "finalize_acceptance" )[ 0 ];
                 div.getElementsByClassName( "accept_offer" )[ 0 ].onclick = () => {
-                    if ( div.getElementsByClassName( "offer" )[ 0 ].getAttribute( "data-pubkey" ) == pubKey ) return alert( `You cannot accept your own offer` );
+                    if ( div.getElementsByClassName( "offer" )[ 0 ].getAttribute( "data-pubkey" ) == pubKey ) return showModal( `You cannot accept your own offer` );
                     div.getElementsByClassName( "fill_in_details" )[ 0 ].classList.remove( "hidden" );
                 }
-                finalize_button.onclick = async () => {
+                finalize_button.onclick = async e => {
+                    e.target.parentElement.parentElement.classList.add( "hidden" );
                     var principle = Number( div.getElementsByClassName( "enter_amount" )[ 0 ].value );
                     var collateral = principle * Number( ( content.collateral_for_loan / 100 ).toFixed( 2 ) );
                     var btc_holdings = 0;
                     utxos.forEach(  utxo => btc_holdings = btc_holdings + utxo[ "amount" ] );
-                    if ( btc_holdings < collateral ) return alert( `This loan for ${principle} sats requires you to post ${collateral} sats as collateral. You only have ${btc_holdings} sats. Please use the Wallet button to add ${collateral - btc_holdings} sats if you wish to continue` );
+                    if ( btc_holdings < collateral ) return showModal( `This loan for ${principle} sats requires you to post ${collateral} sats as collateral. You only have ${btc_holdings} sats. Please use the Wallet button to add ${collateral - btc_holdings} sats if you wish to continue` );
                     var utxos_for_this_transaction = [];
                     utxos.forEach( utxo => {
                         utxos_for_this_transaction.push({
@@ -574,13 +600,15 @@
                         });
                     });
                     var current_blockheight = await getBlockheight( "" );
-                    // var timelock = content.duration_of_loan * 30 * 144 + current_blockheight;
                     var backup_words = sessionStorage[ "backup_words" ];
+                    showProgress( 1, 7, `getting a fresh address` );
                     console.log( `step 1 of 6, getting a fresh address` );
                     var recovery_address = await alt_getFirstUnusedChangeAddress( backup_words, "testnet/" );
+                    showProgress( 2, 7, `getting a second fresh address` );
                     console.log( `step 2 of 6, getting a second fresh address` );
                     var principle_address = await alt_getFirstUnusedReceiveAddress( backup_words, "testnet/" );
-                    var timelock = current_blockheight + 10;
+                    var timelock = content.duration_of_loan * 30 * 144 + current_blockheight;
+                    if ( $_GET[ "test_short_loans" ] ) timelock = current_blockheight + Number( $_GET[ "test_short_loans" ] );
                     var script_timelock = convertNumToScript( timelock );
                     var scripts = [
                         [ script_timelock, 'OP_CHECKLOCKTIMEVERIFY', 'OP_DROP', lender, 'OP_CHECKSIG' ],
@@ -591,6 +619,7 @@
                     var pubkey = "ab".repeat( 32 );
                     var [ tpubkey ] = tapscript.Tap.getPubKey(pubkey, { tree });
                     var contract_address = tapscript.Address.p2tr.fromPubKey( tpubkey, 'testnet' );
+                    showProgress( 3, 7, `waiting for lender's reply` );
                     console.log( `step 3 of 6, waiting for lender's reply` );
                     var message_for_lender = {
                         msg_type: "accept",
@@ -659,9 +688,11 @@
             }
 
             var handleAccept = async ( content, borrower ) => {
+                // var identifier = SHA256( String( Math.random() ) );
                 var is_valid_json = isValidJson( content );
                 if ( !is_valid_json ) return;
                 json = JSON.parse( content );
+                // console.log( identifier, json.length );
                 if ( !( "offer" in json ) ) return;
                 if ( !( "principle" in json ) ) return;
                 if ( !( "recovery" in json ) ) return;
@@ -670,16 +701,24 @@
                 if ( !( "timelock" in json ) ) return;
                 if ( !( "utxos" in json ) ) return;
                 if ( json[ "offer" ].length != 64 || !isValidHex( json[ "offer" ] ) ) return;
+                // console.log( identifier, json.length );
                 if ( !( json[ "offer" ] in my_offers ) ) return;
+                // console.log( identifier, "my_offers:", my_offers, json[ "offer" ], json[ "offer" ] in my_offers );
                 if ( typeof json[ "principle" ] != "number" ) return;
+                // console.log( identifier, json.length );
                 if ( json[ "principle" ] > my_offers[ json[ "offer" ] ][ "max_to_lend" ] ) return;
                 if ( json[ "principle" ] < my_offers[ json[ "offer" ] ][ "min_to_lend" ] ) return;
                 if ( !isValidAddress( json[ "recovery" ] ) ) return;
+                // console.log( identifier, json.length );
                 if ( !isValidAddress( json[ "principle_address" ] ) ) return;
                 if ( typeof json[ "timelock" ] != "number" ) return;
+                // console.log( identifier, 0, json.length );
                 var current_blockheight = await getBlockheight( "" );
-                // var expected_timelock = my_offers[ json[ "offer" ] ][ "duration_of_loan" ] * 30 * 144 + current_blockheight;
-                var expected_timelock = current_blockheight + 10;
+                // console.log( identifier, 1, json.length );
+                if ( json.length ) return;
+                // console.log( identifier, "my_offers:", my_offers, json[ "offer" ], json[ "offer" ] in my_offers );
+                var expected_timelock = my_offers[ json[ "offer" ] ][ "duration_of_loan" ] * 30 * 144 + current_blockheight;
+                if ( $_GET[ "test_short_loans" ] ) expected_timelock = current_blockheight + Number( $_GET[ "test_short_loans" ] );
                 if ( Math.abs( expected_timelock - json[ "timelock" ] ) > 2 ) return console.log( `couldn't agree on timelock. I had: ${expected_timelock}. They had: ${json[ "timelock" ]}. Difference was greater than 2 so no deal.` );
                 if ( typeof json[ "utxos" ] != "object" ) return;
                 if ( !json[ "utxos" ].length ) return;
@@ -699,7 +738,7 @@
                         },
                     });
                 }
-                console.log( "offer:", json[ "offer" ], "my offers:", Object.keys( my_offers ), my_offers );
+                // console.log( identifier, "offer:", json[ "offer" ], "my offers:", Object.keys( my_offers ), my_offers );
                 var collateral_requirement = json[ "principle" ] * Number( ( my_offers[ json[ "offer" ] ][ "collateral_for_loan" ] / 100 ).toFixed( 2 ) );
                 if ( sum_of_values < collateral_requirement ) return;
                 var borrower_change = sum_of_values - collateral_requirement;
@@ -721,6 +760,7 @@
                 var [ tpubkey, seizure_cblock ] = tapscript.Tap.getPubKey(pubkey, { tree, target: seizure_target });
                 var contract_address = tapscript.Address.p2tr.fromPubKey( tpubkey, 'testnet' );
                 if ( contract_address != json[ "contract" ] ) return;
+                // console.log( identifier, "json still good?", json );
                 var utxos_for_this_transaction = [];
                 utxos.forEach( utxo => {
                     utxos_for_this_transaction.push({
@@ -745,6 +785,7 @@
                 }
                 if ( sum_of_values - json[ "principle" ] != 0 && sum_of_values - json[ "principle" ] < 546 ) return console.log( `Someone tried to make a deal with you but I am aborting. Your utxos are worth ${sum_of_values} sats and the principle is ${collateral_requirement} sats, leaving you with leftover change of ${sum_of_values - json[ "principle" ]} sats, which is less than the dust limit of 546. Add another utxo to resolve this problem.` );
                 var lender_change = sum_of_values - json[ "principle" ];
+                // console.log( identifier, "json still good?", json );
                 var outputs = [];
                 var txsize = 0;
                 inputs.forEach( item => txsize = txsize + 64 + 32 + 8 );
@@ -760,6 +801,7 @@
                 var sats_per_byte = fee_options[ 1 ];
                 sats_per_byte = Number( sats_per_byte );
                 if ( !sats_per_byte ) return console.log( "Someone tried to make a deal with you but there was an error getting fee rates. Aborting, please try again." );
+                // console.log( identifier, "json still good? 0", json );
                 var mining_fee = txsize * sats_per_byte;
                 if ( mining_fee < 172 ) mining_fee = 172;
                 //this first output (vout 0) puts the collateral in the contract
@@ -767,9 +809,11 @@
                     value: collateral_requirement,
                     scriptPubKey: tapscript.Address.toScriptPubKey( contract_address ),
                 });
+                // console.log( identifier, "json still good? 1", json );
                 var amount_for_borrower = json[ "principle" ];
                 if ( borrower_change ) amount_for_borrower = amount_for_borrower + borrower_change - mining_fee;
                 //this second vout (vout 1) gives the principle, and some change if necessary, to the borrower
+                // console.log( identifier, "principle address:", json[ "principle_address" ], json );
                 outputs.push({
                     value: amount_for_borrower,
                     scriptPubKey: tapscript.Address.toScriptPubKey( json[ "principle_address" ] ),
@@ -783,6 +827,7 @@
                         scriptPubKey: tapscript.Address.toScriptPubKey( lender_change_address ),
                     });
                 }
+                // console.log( identifier, "json still good? 2", json );
                 var txdata = tapscript.Tx.create({
                     vin: inputs,
                     vout: outputs,
@@ -790,6 +835,7 @@
                 var index_of_my_inputs = txdata[ "vin" ].length - utxos.length;
                 var my_sigs = [];
                 var num = 0;
+                // console.log( identifier, "json still good? 3", json );
                 var i; for ( i=index_of_my_inputs; i<txdata[ "vin" ].length; i++ ) {
                     var [ tseckey ] = tapscript.Tap.getSecKey( utxos[ num ][ "privkey" ] );
                     my_sigs.push( tapscript.Signer.taproot.sign( tseckey, txdata, i ).hex );
@@ -799,6 +845,7 @@
                 }
                 var txhex = tapscript.Tx.encode( txdata ).hex;
                 var txid = tapscript.Tx.util.getTxid( txhex );
+                // console.log( identifier, "json still good? 4", json );
                 var repayment_value = Math.round( json[ "principle" ] * Number( `1.${my_offers[ json[ "offer" ] ][ "fee_to_borrow" ]}` ) );
                 //each input contributes a 64 byte signature, a 32 byte txid, a 4 byte vout, and 4 extra bytes for padding
                 var txsize = 64 + 32 + 8;
@@ -806,7 +853,9 @@
                 txsize = txsize + 37 * 2;
                 var mining_fee = txsize * sats_per_byte;
                 if ( mining_fee < 172 ) mining_fee = 172;
+                // console.log( identifier, "json still good? 5", json );
                 var repayment_address = await alt_getFirstUnusedReceiveAddress( backup_words, "testnet/" );
+                // console.log( identifier, "recovery:", json[ "recovery" ], json );
                 var repayment_txdata = tapscript.Tx.create({
                     vin: [{
                         txid: txid,
@@ -848,6 +897,9 @@
                 });
                 ready_to_finish_lender[ json[ "offer" ] ] = [ timelock, seizure_txdata[ "vin" ], seizure_target, seizure_script, seizure_cblock, contract_address, json, my_offers[ json[ "offer" ] ], borrower, json[ "offer" ] ];
                 sessionStorage[ "ready_to_finish_lender" ] = JSON.stringify( ready_to_finish_lender );
+                user_history[ "loan_history" ][ json[ "offer" ] ] = [ contract_address, json, my_offers[ json[ "offer" ] ] ];
+                sessionStorage[ "user_history" ] = JSON.stringify( user_history );
+                displayHistory();
                 var message_for_borrower = {
                     msg_type: "finalize",
                     msg: {
@@ -906,11 +958,14 @@
                 var collateral_requirement = principle * Number( ( my_accepts[ json[ "offer" ] ][ "original_offer" ][ "collateral_for_loan" ] / 100 ).toFixed( 2 ) );
                 var borrower_change = sum_of_values - collateral_requirement;
                 var sum_of_values = 0;
+                showProgress( 4, 7, `validating lender's utxos` );
                 console.log( `step 4 of 6, validating lender's utxos` );
                 var i; for ( i=0; i<json[ "utxos" ].length; i++ ) {
                     var utxo = json[ "utxos" ][ i ];
                     var valid = await isUTXOValid( utxo[ "txid" ], utxo[ "vout" ], utxo[ "value" ], utxo[ "address" ], "" );
-                    if ( !valid ) return;
+                    if ( !valid ) {
+                        return showModal( `Aborting because the lender sent you an invalid utxo. Specifically, he said ${utxo[ "txid" ].substring( 0, 4 ) + "..." + utxo[ "txid" ].substring( utxo[ "txid" ].length - 4 )}:${utxo[ "vout" ]} is in address ${utxo[ "address" ]} with a value of ${utxo[ "value" ]} sats, and it isn't, as you can view <a href="${"https://mutinynet.com/api/address/" + utxo[ "address" ] + "/utxo"}" target="_blank">here</a>` );
+                    }
                     sum_of_values = sum_of_values + utxo[ "value" ];
                     inputs.push({
                         txid: utxo[ "txid" ],
@@ -941,11 +996,12 @@
                     //and assuming amounts are denoted in 4 bytes
                     txsize = txsize + 37;
                 }
+                showProgress( 5, 7, `validating fee rates` );
                 console.log( `step 5 of 6, validating fee rates` );
                 var fee_options = await getThreeFeeRates( "" );
                 var sats_per_byte = fee_options[ 1 ];
                 sats_per_byte = Number( sats_per_byte );
-                if ( !sats_per_byte ) return alert( "There was an error getting fee rates. Aborting, please try again." );
+                if ( !sats_per_byte ) return showModal( "There was an error getting fee rates. Aborting, please try again." );
                 var mining_fee = txsize * sats_per_byte;
                 if ( mining_fee < 172 ) mining_fee = 172;
                 //this first output (vout 0) puts the collateral in the contract
@@ -988,7 +1044,7 @@
                     words.splice( 0, 1 );
                     var pubkey = bytesToHex( bech32.bech32m.fromWords( words ) );
                     isValid = await nobleSecp256k1.schnorr.verify( sig, sighash.hex, pubkey );
-                    if ( !isValid ) return alert( `Oh no, one of your counterparty's signtures for the swap transaction was invalid! Aborting` );
+                    if ( !isValid ) return showModal( `Oh no, one of your counterparty's signtures for the swap transaction was invalid! Aborting` );
                     txdata.vin[ i ].witness = [ swap_sigs[ i - utxos.length ] ];
                     try {
                         var sig = swap_sigs[ i - utxos.length ];
@@ -997,16 +1053,17 @@
                         words.splice( 0, 1 );
                         var pubkey = bytesToHex( bech32.bech32m.fromWords( words ) );
                         isValid = await nobleSecp256k1.schnorr.verify( sig, sighash.hex, pubkey );
-                        if ( !isValid ) return alert( `Oh no, one of your counterparty's signtures for the swap transaction was invalid! Aborting` );
+                        if ( !isValid ) return showModal( `Oh no, one of your counterparty's signtures for the swap transaction was invalid! Aborting` );
                         txdata.vin[ i ].witness = [ swap_sigs[ i - utxos.length ] ];
                     } catch( e ) {
-                        return alert( `Oh no, one of your counterparty's signatures for the swap transaction was invalid! Aborting (btw, this is the warning when there was an error in the try/catch block)` );
+                        return showModal( `Oh no, one of your counterparty's signatures for the swap transaction was invalid! Aborting (btw, this is the warning when there was an error in the try/catch block)` );
                     }
-                    if ( !isValid ) return alert( `Oh no, one of your counterparty's signatures for the swap transaction was invalid! Aborting` );
+                    if ( !isValid ) return showModal( `Oh no, one of your counterparty's signatures for the swap transaction was invalid! Aborting` );
                 }
                 var txhex = tapscript.Tx.encode( txdata ).hex;
-                alert( `Broadcast this txhex to start the loan:\n\n${txhex}` );
-                console.log( `step 6 of 6, watching for your transaction in the mempool` );
+                await pushBTCpmt( txhex, "" );
+                showProgress( 6, 7, `watching mempool for your transaction` );
+                console.log( `step 6 of 6, watching mempool for your transaction` );
                 var txid = tapscript.Tx.util.getTxid( txhex );
                 var repayment_value = Math.round( principle * Number( `1.${my_accepts[ json[ "offer" ] ][ "original_offer" ][ "fee_to_borrow" ]}` ) );
                 //each input contributes a 64 byte signature, a 32 byte txid, a 4 byte vout, and 4 extra bytes for padding
@@ -1047,15 +1104,18 @@
                 var sig = tapscript.Signer.taproot.sign( privKey, repayment_txdata, 0, { extension: target } ).hex;
                 repayment_txdata.vin[ 0 ].witness = [ sig, script, cblock ];
                 var isValid = await tapscript.Signer.taproot.verify( repayment_txdata, 0, { extension: target, pubkey: pubKey });
-                if ( !isValid ) return alert( `Oh no, your signture for the repayment tx was invalid! Ask a developer for help` );
+                if ( !isValid ) return showModal( `Oh no, your signture for the repayment tx was invalid! Ask a developer for help` );
                 var lenders_sig = json[ "repay_sig" ];
                 var sighash = await tapscript.Signer.taproot.hash( repayment_txdata, 0, { extension: target, sigflag: 128 | 2 } );
                 var isValid = await nobleSecp256k1.schnorr.verify( lenders_sig.substring( 0, 128 ), sighash.hex, lender );
-                if ( !isValid ) return alert( `Oh no, your counterparty's signture for the repayment tx was invalid! Aborting` );
+                if ( !isValid ) return showModal( `Oh no, your counterparty's signture for the repayment tx was invalid! Aborting` );
                 var inputs_and_outputs = [ repayment_txdata[ "vin" ], repayment_txdata[ "vout" ] ];
                 if ( !( String( timelock ) in ready_to_finish ) ) ready_to_finish[ String( timelock ) ] = [];
                 ready_to_finish[ String( timelock ) ].push( inputs_and_outputs, my_accepts[ json[ "offer" ] ], lender, lenders_sig );
                 sessionStorage[ "ready_to_finish" ] = JSON.stringify( ready_to_finish );
+                user_history[ "borrow_history" ][ json[ "offer" ] ] = my_accepts[ json[ "offer" ] ];
+                sessionStorage[ "user_history" ] = JSON.stringify( user_history );
+                displayHistory();
             }
 
             function isValidJson( content ) {
@@ -1094,10 +1154,15 @@
             }
 
             async function isUTXOValid( txid, vout, value, address, network ) {
-                var txinfo = await getData( `https://mutinynet.com/${network}api/tx/${txid}` );
-                txinfo = JSON.parse( txinfo );
-                if ( txinfo[ "vout" ][ vout ][ "value" ] == value && txinfo[ "vout" ][ vout ][ "scriptpubkey_address" ] == address ) return true;
-                return;
+                var esplorautxos = await getData( "https://mutinynet.com/" + network + "api/address/" + address + "/utxo" );
+                esplorautxos = JSON.parse( esplorautxos );
+                var obj = [];
+                var is_valid = false;
+                esplorautxos.every( async item => {
+                    if ( item[ "txid" ] == txid && item[ "vout" ] == vout && item[ "value" ] == value ) return is_valid = true;
+                    return true;
+                });
+                return is_valid;
             }
 
             async function getBlockheight( network ) {
@@ -1156,8 +1221,14 @@
             }
 
             var displayActiveContracts = async () => {
-                if ( Object.keys( ready_to_finish ).length ) $( '.active_contracts_div' ).classList.remove( "hidden" );
-                else {
+                if ( Object.keys( ready_to_finish ).length ) {
+                    $( '.active_contracts_div' ).classList.remove( "hidden" );
+                    if ( $( '.modal' ) && !$( '.modal' ).classList.contains( "hidden" ) ) {
+                        showProgress( 7, 7, `done` );
+                        await waitSomeSeconds( 2 );
+                        $( '.x_modal' ).click();
+                    }
+                } else {
                     $( '.active_contracts' ).innerHTML = "";
                     $( '.active_contracts_div' ).classList.add( "hidden" );
                 }
@@ -1183,8 +1254,7 @@
                     var html = ``;
                     html = html + `<p>Contract: ${contract}</p>`;
                     html = html + `<p>Principle: ${principle} sats</p>`;
-                    html = html + `<p>Fee to borrow: ${fee_to_borrow}%</p>`;
-                    html = html + `<p>You must repay: ${repayment_value} sats</p>`;
+                    html = html + `<p>Fee you'll pay: ${fee_to_borrow}% (i.e. ${repayment_value - principle} sats)</p>`;
                     html = html + `<p>You have: ${my_balance} sats, which is ${enough_or_not}enough ${pay_it_off}</p>`;
                     html = html + `<p>Repay before this block: block ${item}</p>`;
                     html = html + `<p>Current block: block ${current_blockheight}</p>`;
@@ -1229,9 +1299,16 @@
                             txsize = txsize + 37;
                         }
                         var fee_options = await getThreeFeeRates( "" );
-                        var sats_per_byte = prompt( `Please enter a fee rate as a number. Specifically, the number of sats per byte you want to pay. The minimum rate is ${fee_options[ 0 ]}, the average rate is ${fee_options[ 1 ]}, and the urgent rate is ${fee_options[ 2 ]}.` );
-                        sats_per_byte = Number( sats_per_byte );
-                        if ( !sats_per_byte ) return alert( "You entered an invalid fee rate. You must enter a number greater than 0, such as 5, 10, or 25. Please try again." );
+                        sessionStorage.removeItem( "modal_cleared" );
+                        sessionStorage.removeItem( "sats_per_byte" );
+                        showModal( `<p>Please enter a fee rate as a number. Specifically, the number of sats per byte you want to pay. The minimum rate is ${fee_options[ 0 ]}, the average rate is ${fee_options[ 1 ]}, and the urgent rate is ${fee_options[ 2 ]}.</p><p><input class="modal_sats_per_byte"></p><p><button class="modal_submit_sats_per_byte" onclick="sessionStorage.sats_per_byte = $( '.modal_sats_per_byte' ).value;sessionStorage.modal_cleared = true;">Submit</button></p>`, true );
+                        $( '.x_modal' ).classList.add( "hidden" );
+                        await getNote( "modal_cleared" );
+                        modalVanish();
+                        $( '.x_modal' ).classList.remove( "hidden" );
+                        var sats_per_byte = Number( sessionStorage[ "sats_per_byte" ] );
+                        sessionStorage.removeItem( "sats_per_byte" );
+                        if ( !sats_per_byte ) return showModal( "You entered an invalid fee rate. You must enter a number greater than 0, such as 5, 10, or 25. Please try again." );
                         var mining_fee = txsize * sats_per_byte;
                         if ( mining_fee < 172 ) mining_fee = 172;
                         outputs[ 1 ][ "value" ] = sum_of_values - outputs[ 0 ][ "value" ] - mining_fee;
@@ -1255,7 +1332,7 @@
                         repayment_txdata.vin[ 0 ].witness = [ sig, lenders_sig, script, cblock ];
                         var sighash = await tapscript.Signer.taproot.hash( repayment_txdata, 0, { extension: target } );
                         var isValid = await nobleSecp256k1.schnorr.verify( sig, sighash.hex, pubKey );
-                        if ( !isValid ) return alert( `Oh no, your signture for the repayment tx was invalid! Ask a developer for help` );
+                        if ( !isValid ) return showModal( `Oh no, your signture for the repayment tx was invalid! Ask a developer for help` );
                         var my_sigs = [];
                         var i; for ( i=0; i<utxos.length; i++ ) {
                             var [ tseckey ] = tapscript.Tap.getSecKey( utxos[ i ][ "privkey" ] );
@@ -1263,7 +1340,8 @@
                             repayment_txdata.vin[ i + 1 ].witness = [ my_sigs[ i ] ];
                         }
                         var txhex = tapscript.Tx.encode( repayment_txdata ).hex;
-                        alert( `Broadcast this txhex:\n\n${txhex}` );
+                        var txid = await pushBTCpmt( txhex, "" );
+                        return showModal( `Success! Here is your txid: <a href="https://mutinynet.com/tx/${txid}" target="_blank">https://mutinynet.com/tx/${txid}</a>` );
                     }
                 });
             }
@@ -1317,9 +1395,9 @@
                     } catch( e ) {
                         $( '.active_contracts_lender' ).innerHTML = "";
                         $( '.active_contracts_lender_div' ).classList.add( "hidden" );
-                        if ( original_offer_id ) return alert( `Someone tried to take one of your offers but you got rid of it -- this one: ${original_offer_id}` );
+                        if ( original_offer_id ) return showModal( `Someone tried to take one of your offers but you got rid of it -- this one: ${original_offer_id}` );
                         if ( !my_offers.length ) 
-                        return alert( `not done yet` );
+                            return showModal( `unknown error, please refresh your browser. If this error persists, ask a developer for help.` );
                     }
                     var duration_of_loan = original_offer[ "duration_of_loan" ];
                     var collateral_for_loan = original_offer[ "collateral_for_loan" ];
@@ -1334,6 +1412,7 @@
                     }
                     var blocks_since_confirmed = await howManyConfs( txinfo[ 0 ], "" );
                     var current_blockheight = await getBlockheight( "" );
+                    if ( !( item in ready_to_finish_lender ) ) return;
                     var time_left = timelock - current_blockheight;
                     var real_time_left = Number( String( time_left ) );
                     var block_or_blocks = "blocks";
@@ -1343,7 +1422,7 @@
                     var html = ``;
                     html = html + `<p>Contract: ${contract}</p>`;
                     html = html + `<p>Principle: ${principle} sats</p>`;
-                    html = html + `<p>Fee you'll earn: ${fee_to_borrow}%</p>`;
+                    html = html + `<p>Fee you'll earn: ${fee_to_borrow}% (i.e. ${repayment_value - principle} sats)</p>`;
                     html = html + `<p>Or you'll get: ${collateral_requirement} sats (if the borrower fails to pay)</p>`;
                     html = html + `<p>You currently have: ${my_balance} sats</p>`;
                     html = html + `<p>You will have: ${my_balance + repayment_value} sats</p>`;
@@ -1351,8 +1430,8 @@
                     html = html + `<p>When payment is due: block ${current_blockheight + real_time_left}</p>`;
                     html = html + `<p>Current block: block ${current_blockheight}</p>`;
                     html = html + `<p>Time til then: ${time_left} ${block_or_blocks}</p>`;
-                    if ( !( item in ready_to_finish_lender ) ) return;
-                    if ( !time_left ) html = html + `<p>Time's up! <span class="take_collateral" data-vin="${textToHex( JSON.stringify( ready_to_finish_lender[ item ][ 1 ] ) )}" data-borrower="${borrower}" data-custom_utxo="${utxos_for_this_transaction[ 0 ][ "txid" ] + utxos_for_this_transaction[ 0 ][ "vout" ]}" data-timelock="${timelock}" data-target="${ready_to_finish_lender[ item ][ 2 ]}" data-script="${textToHex( JSON.stringify( ready_to_finish_lender[ item ][ 3 ] ) )}" data-cblock="${ready_to_finish_lender[ item ][ 4 ]}" style="color: blue; text-decoration: underline; cursor: pointer;">Take the collateral</span></p>`;
+                    if ( !time_left ) html = html + `<p>Time's up! <span class="take_collateral" data-can_or_cant="can" data-vin="${textToHex( JSON.stringify( ready_to_finish_lender[ item ][ 1 ] ) )}" data-borrower="${borrower}" data-custom_utxo="${utxos_for_this_transaction[ 0 ][ "txid" ] + utxos_for_this_transaction[ 0 ][ "vout" ]}" data-timelock="${timelock}" data-target="${ready_to_finish_lender[ item ][ 2 ]}" data-script="${textToHex( JSON.stringify( ready_to_finish_lender[ item ][ 3 ] ) )}" data-cblock="${ready_to_finish_lender[ item ][ 4 ]}" style="color: blue; text-decoration: underline; cursor: pointer;">Take the collateral</span></p>`;
+                    else html = html + `<p>You can't <span class="take_collateral" data-can_or_cant="cant" data-vin="${textToHex( JSON.stringify( ready_to_finish_lender[ item ][ 1 ] ) )}" data-borrower="${borrower}" data-custom_utxo="${utxos_for_this_transaction[ 0 ][ "txid" ] + utxos_for_this_transaction[ 0 ][ "vout" ]}" data-timelock="${timelock}" data-target="${ready_to_finish_lender[ item ][ 2 ]}" data-script="${textToHex( JSON.stringify( ready_to_finish_lender[ item ][ 3 ] ) )}" data-cblock="${ready_to_finish_lender[ item ][ 4 ]}" style="color: blue; text-decoration: underline; cursor: pointer;">take the collateral</span> til the borrower runs out of time to repay you, but you can try anyway</p>`;
                     if ( !i ) $( '.active_contracts_lender' ).innerHTML = "";
                     var div = document.createElement( "div" );
                     div.classList.add( "active_contract_lender" );
@@ -1362,10 +1441,10 @@
                 }
                 $$( '.take_collateral' ).forEach( item => {
                     item.onclick = async e => {
+                        var can_or_cant = e.target.getAttribute( "data-can_or_cant" );
                         var inputs = JSON.parse( hexToText( e.target.getAttribute( "data-vin" ) ) );
                         var borrower = e.target.getAttribute( "data-borrower" );
                         var custom_utxo = e.target.getAttribute( "data-custom_utxo" );
-                        //TODO: uncomment the line below and remove the one beneath it
                         var timelock = Number( e.target.getAttribute( "data-timelock" ) );
                         var target = e.target.getAttribute( "data-target" );
                         var script = JSON.parse( hexToText( e.target.getAttribute( "data-script" ) ) );
@@ -1379,9 +1458,16 @@
                         var txsize = 64 + 32 + 8;
                         txsize = txsize + 37;
                         var fee_options = await getThreeFeeRates( "" );
-                        var sats_per_byte = prompt( `Please enter a fee rate as a number. Specifically, the number of sats per byte you want to pay. The minimum rate is ${fee_options[ 0 ]}, the average rate is ${fee_options[ 1 ]}, and the urgent rate is ${fee_options[ 2 ]}.` );
-                        sats_per_byte = Number( sats_per_byte );
-                        if ( !sats_per_byte ) return alert( "You entered an invalid fee rate. You must enter a number greater than 0, such as 5, 10, or 25. Please try again." );
+                        sessionStorage.removeItem( "modal_cleared" );
+                        sessionStorage.removeItem( "sats_per_byte" );
+                        showModal( `<p>Please enter a fee rate as a number. Specifically, the number of sats per byte you want to pay. The minimum rate is ${fee_options[ 0 ]}, the average rate is ${fee_options[ 1 ]}, and the urgent rate is ${fee_options[ 2 ]}.</p><p><input class="modal_sats_per_byte"></p><p><button class="modal_submit_sats_per_byte" onclick="sessionStorage.sats_per_byte = $( '.modal_sats_per_byte' ).value;sessionStorage.modal_cleared = true;">Submit</button></p>`, true );
+                        $( '.x_modal' ).classList.add( "hidden" );
+                        await getNote( "modal_cleared" );
+                        modalVanish();
+                        $( '.x_modal' ).classList.remove( "hidden" );
+                        var sats_per_byte = Number( sessionStorage[ "sats_per_byte" ] );
+                        sessionStorage.removeItem( "sats_per_byte" );
+                        if ( !sats_per_byte ) return showModal( "You entered an invalid fee rate. You must enter a number greater than 0, such as 5, 10, or 25. Please try again." );
                         var mining_fee = txsize * sats_per_byte;
                         if ( mining_fee < 172 ) mining_fee = 172;
                         var outputs = [{
@@ -1406,11 +1492,56 @@
                         seizure_txdata.vin[ 0 ].witness = [ sig, script, cblock ];
                         var sighash = await tapscript.Signer.taproot.hash( seizure_txdata, 0, { extension: target } );
                         var isValid = await nobleSecp256k1.schnorr.verify( sig, sighash.hex, pubKey );
-                        if ( !isValid ) return alert( `Oh no, your signture for the repayment tx was invalid! Ask a developer for help` );
+                        if ( !isValid ) return showModal( `Oh no, your signture for the repayment tx was invalid! Ask a developer for help` );
                         var txhex = tapscript.Tx.encode( seizure_txdata ).hex;
-                        alert( `Broadcast this txhex:\n\n${txhex}` );
+                        if ( can_or_cant == "can" ) {
+                            var txid = await pushBTCpmt( txhex, "" );
+                            return showModal( `Success! Here is your txid: <a href="https://mutinynet.com/tx/${txid}" target="_blank">https://mutinynet.com/tx/${txid}</a>` );
+                        } else return showModal( `<p>Go here: <a href="https://mutinynet.com/tx/push" target="_blank">https://mutinynet.com/tx/push</a></p><p>And try to broadcast this transaction:</p><p>${txhex}</p>` );
                     }
                 });
+            }
+
+            async function postData( url, json, content_type = "", apikey = "" ) {
+                var rtext = "";
+                function inner_post( url, json, content_type = "", apikey = "" ) {
+                    var xhttp = new XMLHttpRequest();
+                    xhttp.open( "POST", url, true );
+                    if ( content_type ) {
+                        xhttp.setRequestHeader( `Content-Type`, content_type );
+                    }
+                    if ( apikey ) {
+                        xhttp.setRequestHeader( `X-Api-Key`, apikey );
+                    }
+                    xhttp.send( json );
+                    return xhttp;
+                }
+                var data = inner_post( url, json, content_type, apikey );
+                data.onerror = function( e ) {
+                    rtext = "error";
+                }
+                async function isResponseReady() {
+                    return new Promise( function( resolve, reject ) {
+                        if ( rtext == "error" ) {
+                            resolve( rtext );
+                        }
+                        if ( !data.responseText || data.readyState != 4 ) {
+                            setTimeout( async function() {
+                                var msg = await isResponseReady();
+                                resolve( msg );
+                            }, 50 );
+                        } else {
+                            resolve( data.responseText );
+                        }
+                    });
+                }
+                var returnable = await isResponseReady();
+                return returnable;
+            }
+
+            async function pushBTCpmt( rawtx, network ) {
+                var txid = await postData( "https://mutinynet.com/" + network + "api/tx", rawtx );
+                return txid;
             }
 
             async function howManyConfs( txid, network ) {
@@ -1465,15 +1596,234 @@
             }
 
             function modalVanish() {
-                $( ".black-bg" ).style.display = "none";
-                $( ".modal" ).style.display = "none";
+                $( ".black-bg" ).classList.add( "hidden" );
+                $( ".modal" ).classList.add( "hidden" );
             }
             
-            function showModal( content ) {
-                $( ".modal" ).innerHTML = `<div class="x_modal" style="position: absolute;right: 1rem;top: 0.5rem;font-size: 2rem; cursor: pointer; color: black;" onclick="modalVanish()">&times;</div>`;
+            function showModal( content, block_til_clear ) {
+                if ( block_til_clear ) var fn = `modalVanish();sessionStorage[ 'modal_cleared' ] = true;`; else var fn = `modalVanish();`;
+                $( ".modal" ).innerHTML = `<div class="x_modal" style="position: absolute;right: 1rem;top: 0.5rem;font-size: 2rem; cursor: pointer; color: black;" onclick="${fn}">&times;</div>`;
                 $( ".modal" ).innerHTML += `<div style="overflow-y: auto; max-height: 80vh; margin-top: 1.5rem;">${content}</div>`;
-                $( ".black-bg" ).style.display = "block";
-                $( ".modal" ).style.display = "block";
+                $( ".black-bg" ).classList.remove( "hidden" );
+                $( ".modal" ).classList.remove( "hidden" );
+            }
+
+            var showProgress = ( num, total, msg ) => {
+                var percent = ( ( num / total ) * 100 ).toFixed( 2 );
+                if ( num == 1 ) {
+                    showModal( `<div class="progress">
+                        <h2>Progress bar <span id="goal" style="font-size: .8em; font-weight: normal;"></span></h2>
+                        <div class="progressOutline" style="height: 2em; border: 1px solid grey; border-radius: 25px; overflow: hidden;">
+                            <div class="progressBar" style="height: 2em; background-color: #61eb34; width: 0%; transition: width 1s;">
+                            </div>
+                        </div>
+                        <div class="progress_status"></div>
+                    </div>
+                    ` );
+                }
+                $( '.progressBar' ).style.width = `${percent}%`;
+                $( '.progress_status' ).innerText = msg;
+            }
+
+            async function getNote( item ) {
+                async function isNoteSetYet( note_i_seek ) {
+                    return new Promise( function( resolve, reject ) {
+                        if ( !note_i_seek ) {
+                            setTimeout( async function() {
+                                var msg = await isNoteSetYet( sessionStorage[ item ] );
+                                resolve( msg );
+                            }, 100 );
+                        } else {
+                            resolve( note_i_seek );
+                        }
+                    });
+                }
+                async function getTimeoutData() {
+                    var note_i_seek = await isNoteSetYet( sessionStorage[ item ] );
+                    return note_i_seek;
+                }
+                var returnable = await getTimeoutData();
+                return returnable;
+            }
+
+            var displayHistory = async () => {
+                if ( Object.keys( user_history[ "loan_history" ] ).length ) {
+                    $( '.historical_loan_contracts_label' ).classList.remove( "hidden" );
+                    $( '.historical_loan_contracts' ).classList.remove( "hidden" );
+                    $( '.view_history' ).classList.remove( "hidden" );
+                }
+                if ( Object.keys( user_history[ "borrow_history" ] ).length ) {
+                    $( '.historical_borrow_contracts_label' ).classList.remove( "hidden" );
+                    $( '.historical_borrow_contracts' ).classList.remove( "hidden" );
+                    $( '.view_history' ).classList.remove( "hidden" );
+                }
+                var borrow_profits = 0;
+                var borrow_losses = 0;
+                var html_for_historical_borrows = document.createElement( "div" );
+                var i; for ( i=0; i<Object.keys( user_history[ "borrow_history" ] ).length; i++ ) {
+                    var item = Object.keys( user_history[ "borrow_history" ] )[ i ];
+                    var contract = user_history[ "borrow_history" ][ item ][ "msg" ][ "contract" ];
+                    var principle = user_history[ "borrow_history" ][ item ][ "msg" ][ "principle" ];
+                    var timelock = user_history[ "borrow_history" ][ item ][ "msg" ][ "timelock" ];
+                    var fee_to_borrow = user_history[ "borrow_history" ][ item ][ "original_offer" ][ "fee_to_borrow" ];
+                    var duration_of_loan = user_history[ "borrow_history" ][ item ][ "original_offer" ][ "duration_of_loan" ];
+                    var collateral_for_loan = user_history[ "borrow_history" ][ item ][ "original_offer" ][ "collateral_for_loan" ];
+                    var collateral_requirement = principle * Number( ( collateral_for_loan / 100 ).toFixed( 2 ) );
+                    var repayment_value = Math.round( principle * Number( `1.${fee_to_borrow}` ) );
+                    var txinfo = await addressReceivedMoneyInThisTx( contract, "" );
+                    if ( !txinfo[ 0 ] ) continue;
+                    var status = "in progress";
+                    var txid_of_spending_tx = await addressSentMoneyInThisTx( contract, txinfo[ 0 ], "" );
+                    if ( txid_of_spending_tx ) status = "paid off";
+                    if ( txid_of_spending_tx ) var more_info = await getData( `https://mutinynet.com/api/tx/${txid_of_spending_tx}` );
+                    if ( more_info ) var amount_sent = JSON.parse( more_info )[ "vout" ][ 0 ][ "value" ];
+                    if ( more_info ) var tx_status = JSON.parse( more_info )[ "status" ];
+                    if ( tx_status && "block_height" in tx_status ) tx_status = tx_status[ "block_height" ];
+                    else tx_status = "the transaction is in the mempool and will be settled when it confirms";
+                    //TODO: the following line assumes that if the amount_sent is more than the repayment
+                    //value then the lender got the collateral. But that will not necessarily be true if
+                    //the collateral_requirement was only 100% of the repayment_value. Fix that assumption.
+                    if ( amount_sent && amount_sent > repayment_value ) status = "took collateral";
+                    if ( amount_sent && amount_sent > repayment_value ) var losses_on_this_loan = collateral_requirement - principle;
+                    if ( amount_sent && amount_sent <= repayment_value ) var losses_on_this_loan = repayment_value - principle;
+                    if ( amount_sent ) borrow_losses = borrow_losses + losses_on_this_loan;
+                    var current_blockheight = await getBlockheight( "" );
+                    var time_left = timelock - current_blockheight;
+                    var block_or_blocks = "blocks";
+                    if ( time_left == 1 ) block_or_blocks = "block";
+                    if ( time_left < 1 ) time_left = 0;
+                    var html = ``;
+                    html = html + `<p>Contract: ${contract}</p>`;
+                    html = html + `<p>Principle: ${principle} sats</p>`;
+                    if ( status == "in progress" ) html = html + `<p>Fee you'll pay: ${fee_to_borrow}% (i.e. ${repayment_value - principle} sats)</p>`;
+                    if ( status == "paid off" ) html = html + `<p>Fee you paid: ${fee_to_borrow}% (i.e. ${repayment_value - principle} sats)</p>`;
+                    if ( status == "took collateral" ) html = html + `<p>You did not repay, so they took your collateral, which was: ${collateral_requirement} sats</p>`;
+                    if ( status != "in progress" ) html = html + `<p>Losses on this loan: ${losses_on_this_loan} sats</p>`;
+                    if ( status == "in progress" ) html = html + `<p>Repay before this block: block ${timelock}</p>`;
+                    else html = html + `<p>When payment was due: block ${timelock}</p>`;
+                    if ( status == "in progress" ) html = html + `<p>Current block: block ${current_blockheight}</p>`;
+                    else html = html + `<p>When contract settled: block ${tx_status}</p>`;
+                    if ( status == "in progress" ) html = html + `<p>Time left: ${time_left} ${block_or_blocks}</p>`;
+                    if ( !i ) html_for_historical_borrows.innerHTML = "";
+                    var div = document.createElement( "div" );
+                    div.classList.add( "historical_contract" );
+                    div.classList.add( "bordered" );
+                    div.innerHTML = html;
+                    html_for_historical_borrows.append( div );
+                }
+                $( '.historical_borrow_contracts' ).innerHTML = `<p>Profits: ${borrow_profits} sats</p><p>Losses: ${borrow_losses} sats</p>`;
+                $( '.historical_borrow_contracts' ).append( html_for_historical_borrows );
+                var loan_profits = 0;
+                var loan_losses = 0;
+                var html_for_historical_loans = document.createElement( "div" );
+                var i; for ( i=0; i<Object.keys( user_history[ "loan_history" ] ).length; i++ ) {
+                    var item = Object.keys( user_history[ "loan_history" ] )[ i ];
+                    var contract = user_history[ "loan_history" ][ item ][ 0 ];
+                    var accept_msg = user_history[ "loan_history" ][ item ][ 1 ];
+                    var original_offer = user_history[ "loan_history" ][ item ][ 2 ];
+                    var original_offer_id = item;
+                    var principle = accept_msg[ "principle" ];
+                    var timelock = accept_msg[ "timelock" ];
+                    try {
+                        var fee_to_borrow = original_offer[ "fee_to_borrow" ];
+                    } catch( e ) {continue;}
+                    var duration_of_loan = original_offer[ "duration_of_loan" ];
+                    var collateral_for_loan = original_offer[ "collateral_for_loan" ];
+                    var collateral_requirement = principle * Number( ( collateral_for_loan / 100 ).toFixed( 2 ) );
+                    var repayment_value = Math.round( principle * Number( `1.${fee_to_borrow}` ) );
+                    var txinfo = await addressReceivedMoneyInThisTx( contract, "" );
+                    if ( !txinfo[ 0 ] ) continue;
+                    var status = "in progress";
+                    var txid_of_spending_tx = await addressSentMoneyInThisTx( contract, txinfo[ 0 ], "" );
+                    if ( txid_of_spending_tx ) status = "paid off";
+                    if ( txid_of_spending_tx ) var more_info = await getData( `https://mutinynet.com/api/tx/${txid_of_spending_tx}` );
+                    if ( more_info ) var amount_sent = JSON.parse( more_info )[ "vout" ][ 0 ][ "value" ];
+                    if ( more_info ) var tx_status = JSON.parse( more_info )[ "status" ];
+                    if ( tx_status && "block_height" in tx_status ) tx_status = tx_status[ "block_height" ];
+                    else tx_status = "the transaction is in the mempool and will be settled when it confirms";
+                    //TODO: the following line assumes that if the amount_sent is more than the repayment
+                    //value then the lender got the collateral. But that will not necessarily be true if
+                    //the collateral_requirement was only 100% of the repayment_value. Fix that assumption.
+                    if ( amount_sent && amount_sent > repayment_value ) status = "took collateral";
+                    if ( amount_sent && amount_sent > repayment_value ) var profits_on_this_loan = collateral_requirement - principle;
+                    if ( amount_sent && amount_sent <= repayment_value ) var profits_on_this_loan = repayment_value - principle;
+                    if ( amount_sent ) loan_profits = loan_profits + profits_on_this_loan;
+                    var blocks_since_confirmed = await howManyConfs( txinfo[ 0 ], "" );
+                    var current_blockheight = await getBlockheight( "" );
+                    var time_left = timelock - current_blockheight;
+                    var real_time_left = Number( String( time_left ) );
+                    var block_or_blocks = "blocks";
+                    if ( time_left == 1 ) block_or_blocks = "block";
+                    if ( time_left < 1 ) time_left = 0;
+                    var utxos_for_this_transaction = accept_msg[ "utxos" ];
+                    var html = ``;
+                    html = html + `<p>Contract: ${contract}</p>`;
+                    html = html + `<p>Principle: ${principle} sats</p>`;
+                    if ( status == "in progress" ) html = html + `<p>Fee you'll earn: ${fee_to_borrow}% (i.e. ${repayment_value} sats)</p>`;
+                    if ( status == "paid off" ) html = html + `<p>Fee you earned: ${fee_to_borrow}% (i.e. ${repayment_value - principle} sats)</p>`;
+                    if ( status == "took collateral" ) html = html + `<p>They did not repay, so you took their collateral, which was: ${collateral_requirement} sats</p>`;
+                    if ( status != "in progress" ) html = html + `<p>Profits on this loan: ${profits_on_this_loan} sats</p>`;
+                    if ( status == "in progress" ) html = html + `<p>When payment is due: block ${current_blockheight + real_time_left}</p>`;
+                    else html = html + `<p>When payment was due: block ${current_blockheight + real_time_left}</p>`;
+                    if ( status == "in progress" ) html = html + `<p>Current block: block ${current_blockheight}</p>`;
+                    else html = html + `<p>When contract settled: block ${tx_status}</p>`;
+                    if ( status == "in progress" ) html = html + `<p>Time til then: ${time_left} ${block_or_blocks}</p>`;
+                    if ( !i ) html_for_historical_loans.innerHTML = "";
+                    var div = document.createElement( "div" );
+                    div.classList.add( "historical_contract_lender" );
+                    div.classList.add( "bordered" );
+                    div.innerHTML = html;
+                    html_for_historical_loans.append( div );
+                }
+                $( '.historical_loan_contracts' ).innerHTML = `<p>Profits: ${loan_profits} sats</p><p>Losses: ${loan_losses} sats</p>`;
+                $( '.historical_loan_contracts' ).append( html_for_historical_loans );
+            }
+
+            async function addressSentMoneyInThisTx( address, funding_txid, network ) {
+                return new Promise( async function( resolve, reject ) {
+                    var nonjson = await getData( "https://mutinynet.com/" + network + "/api/address/" + address + "/txs" );
+                    json = JSON.parse( nonjson );
+                    json.forEach( function( tx ) {
+                        tx[ "vin" ].forEach( function( input ) {
+                            if ( input[ "txid" ] == funding_txid ) {
+                                resolve( tx[ "txid" ] );
+                            }
+                        });
+                    });
+                    resolve( "" );
+                });
+            }
+            var checkNostrStatus = () => {
+                if ( !( "readyState" in socket ) ) return;
+                if ( socket.readyState == 3 ) good_socket = false;
+            }
+            var addFeeRates = async () => {
+                var fee_options = await getThreeFeeRates( "" );
+                $( '.min_fee' ).innerText = fee_options[ 0 ];
+                $( '.mid_fee' ).innerText = fee_options[ 1 ];
+                $( '.max_fee' ).innerText = fee_options[ 2 ];
+                if ( fee_modified ) return;
+                var minmax = 100;
+                var maxmax = Math.round( fee_options[ 2 ] * 1.25 );
+                if ( maxmax > minmax ) minmax = maxmax;
+                $( ".sats_range" ).max = minmax;
+                $( ".sats_range" ).value = fee_options[ 1 ];
+                $( ".mining_fee" ).innerText = fee_options[ 1 ];
+            }
+            function createQR( content ) {
+                var dataUriPngImage = document.createElement( "img" ),
+                s = QRCode.generatePNG( content, {
+                    ecclevel: "M",
+                    format: "html",
+                    fillcolor: "#FFFFFF",
+                    textcolor: "#000000",
+                    margin: 4,
+                    modulesize: 8,
+                });
+                dataUriPngImage.src = s;
+                dataUriPngImage.className = "qr_code";
+                dataUriPngImage.style.width = "100%";
+                return dataUriPngImage;
             }
         </script>
         <script>
@@ -1526,6 +1876,7 @@
                 <button class="logout hidden">Log out</button>
                 <button class="manage_wallet hidden">Manage wallet</button>
                 <button class="new_loan hidden">New loan</button>
+                <button class="view_history hidden">History</button>
             </div>
             <h2>Loan offers</h2>
             <div class="orderbook">
@@ -1578,7 +1929,51 @@
             </p>
             <p><button class="submit_loan_offer">Submit</button></p>
         </div>
+        <div class="history hidden">
+            <button class="home">Home</button>
+            <h2 class="historical_loan_contracts_label hidden">Historical loan contracts</h2>
+            <div class="historical_loan_contracts hidden"></div>
+            <h2 class="historical_borrow_contracts_label hidden">Historical borrow contracts</h2>
+            <div class="historical_borrow_contracts hidden"></div>
+        </div>
+        <div class="send_page hidden">
+            <button class="back_to_wallet">Back</button>
+            <p class="bold">Destination address</p>
+            <p><input class="destino"></p>
+            <p class="bold">Amount (in sats)</p>
+            <p><input class="amount"></p>
+            <p class="bold">Fee rate</p>
+            <div class=".sliderange">
+                <p>Sats per byte: <span class="mining_fee">1</span></p>
+                <input class="sats_range" type="range" min="1" max="100" value="1">
+            </div>
+            <script>
+                $( ".mining_fee" ).innerText = $( ".sats_range" ).value;
+                $( ".sats_range" ).oninput = () => {
+                    fee_modified = true;
+                    $( ".mining_fee" ).innerText = $( ".sats_range" ).value;
+                }
+            </script>
+            <p class="bold">Suggested fee rates</p>
+            <p>Min: <span class="min_fee"></span><br>Mid: <span class="mid_fee"></span><br>Max: <span class="max_fee"></span></p>
+            <p><button class="send_pmt">Send</button></p>
+        </div>
         <script>
+            $$( '.back_to_wallet' ).forEach( item => {
+                item.onclick = () => hider( 'wallet' );
+            });
+            $( '.send_pmt' ).onclick = () => {
+                var destino = $( '.destino' ).value;
+                if ( !isValidAddress( destino ) ) return showModal( "You entered an invalid bitcoin address. Please try again." );
+                var amt = $( '.amount' ).value;
+                if ( !amt ) return showModal( "You entered an invalid amount. Please try again." );
+                amt = Number( amt );
+                if ( amt < 546 ) return showModal( "The amount you entered is invalid or below bitcoin's dust limit of 546 sats. Please try again." );
+                var sats_per_byte = $( '.mining_fee' ).innerText;
+                sats_per_byte = Number( sats_per_byte );
+                if ( !sats_per_byte ) return showModal( "You entered an invalid fee rate. You must enter a number greater than 0, such as 5, 10, or 25. Please try again." );
+                spendCoins( destino, amt, sats_per_byte, "testnet/" );
+            }
             $( '.submit_loan_offer' ).onclick = async () => {
                 var btc_holdings = 0;
                 utxos.forEach(  utxo => btc_holdings = btc_holdings + utxo[ "amount" ] );
@@ -1602,18 +1997,29 @@
                 my_offers[ signedOffer.id ] = offer;
                 sessionStorage[ "my_offers" ] = JSON.stringify( my_offers );
             }
-            $( '.login' ).onclick = () => {
+            $( '.login' ).onclick = async () => {
+                if ( !page_loaded ) return;
                 var backup_words = sessionStorage[ "backup_words" ];
-                if ( !backup_words ) backup_words = prompt( 'Enter your 12 words' );
+                if ( !backup_words ) {
+                    sessionStorage.removeItem( "modal_cleared" );
+                    showModal( `<p>Enter your 12 words</p><p><input class="modal_twelve_words"></p><p><button class="modal_submit_twelve_words" onclick="sessionStorage.backup_words = $( '.modal_twelve_words' ).value;sessionStorage.modal_cleared = true;">Submit</button></p>`, true );
+                    $( '.x_modal' ).classList.add( "hidden" );
+                    await getNote( "modal_cleared" );
+                    modalVanish();
+                    $( '.x_modal' ).classList.remove( "hidden" );
+                    var backup_words = sessionStorage[ "backup_words" ];
+                }
+                if ( !backup_words ) sessionStorage.removeItem( "backup_words" );
                 if ( !backup_words ) return;
-                if ( !bip39.validateMnemonic( backup_words ) ) return alert( `Your backup words are invalid, try again` );
-                sessionStorage[ "backup_words" ] = backup_words;
+                if ( !bip39.validateMnemonic( backup_words ) ) sessionStorage.removeItem( "backup_words" );
+                if ( !bip39.validateMnemonic( backup_words ) ) return showModal( `Your backup words are invalid, try again` );
                 var xprv = getXprvFromWords( backup_words, "44'" );
                 var keypair = getKeypairFromXprv( xprv, 0 );
                 privKey = keypair[ 0 ];
                 pubKey = keypair[ 1 ].substring( 2 );
                 try {
-                    socket = new WebSocket( relay );
+                    if ( !good_socket ) socket = new WebSocket( relay );
+                    good_socket = true;
                 } catch ( e ) {}
                 socket.addEventListener('message', async message => {
                     var [ type, subId, event ] = JSON.parse( message.data );
@@ -1651,13 +2057,15 @@
                 utxos_loaded = false;
                 $( '.balance' ).innerText = `loading...`;
             }
-            $( '.new_account' ).onclick = () => {
+            $( '.new_account' ).onclick = async () => {
                 var backup_words = sessionStorage[ "backup_words" ];
-                if ( backup_words ) return alert( `You already have an account and you are logged in. Log out to make a new one` );
+                if ( backup_words ) return showModal( `You already have an account and you are logged in. Log out to make a new one` );
                 sessionStorage[ "backup_words" ] = generateWords();
                 var backup_words = sessionStorage[ "backup_words" ];
-                alert( `Save your private keys or you will lose your money:\n\n${backup_words}` );
-                alert( `Congratulations, your account is ready and you are logged in` );
+                sessionStorage.removeItem( "modal_cleared" );
+                showModal( `<p>Save your private keys or you will lose your money:</p><p>${backup_words}</p>`, true );
+                await getNote( "modal_cleared" );
+                showModal( `Congratulations, your account is ready and you are logged in` );
                 $( '.login' ).click();
             }
             $( '.manage_wallet' ).onclick = () => hider( 'wallet' );
@@ -1665,25 +2073,35 @@
                 item.onclick = () => hider( 'homepage' );
             });
             $( '.send' ).onclick = async () => {
-                var destino = prompt( "Please enter the bitcoin address where you want to send the money" );
-                var amt = prompt( "Please enter whatever amount you want to send there" );
-                amt = Number( amt );
-                var fee_options = await getThreeFeeRates( "" );
-                var sats_per_byte = prompt( `Please enter a fee rate as a number. Specifically, the number of sats per byte you want to pay. The minimum rate is ${fee_options[ 0 ]}, the average rate is ${fee_options[ 1 ]}, and the urgent rate is ${fee_options[ 2 ]}.` );
-                sats_per_byte = Number( sats_per_byte );
-                if ( !sats_per_byte ) return alert( "You entered an invalid fee rate. You must enter a number greater than 0, such as 5, 10, or 25. Please try again." );
-                spendCoins( destino, amt, sats_per_byte, "testnet/" );
+                $( '.destino' ).value = "";
+                $( '.amount' ).value = "";
+                hider( 'send_page' );
             }
             $( '.receive' ).onclick = async () => {
                 var backup_words = sessionStorage[ "backup_words" ];
                 if ( !backup_words ) return;
-                var first_unused = await alt_getFirstUnusedReceiveAddress( backup_words, "testnet/" );
-                alert( first_unused );
+                var address = await alt_getFirstUnusedReceiveAddress( backup_words, "testnet/" );
+                var url = "bitcoin:" + address;
+                var a = document.createElement( "a" );
+                a.href = url;
+                a.target = "_blank";
+                var qr = createQR( url.toUpperCase() );
+                qr.style.maxWidth = "250px";
+                a.append( qr );
+                var prep_div = document.createElement( "div" );
+                prep_div.append( a );
+                var div_html = prep_div.innerHTML;
+                var html = `${div_html}`;
+                showModal( html + `<p style="max-width: 350px; margin: auto;">${address}</p>` );
             }
             $( '.new_loan' ).onclick = () => hider( 'new_loan_page' );
+            $( '.view_history' ).onclick = () => hider( 'history' );
             init();
         </script>
-        <div class="black-bg" onclick="modalVanish();"></div>
-        <div class="modal"></div>
+        <div class="black-bg hidden"></div>
+        <div class="modal hidden"></div>
+        <script>
+            page_loaded = true;
+        </script>
     </body>
 </html>
