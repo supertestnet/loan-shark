@@ -103,6 +103,9 @@
             .modal * {
                 color: black;
             }
+            .modal input {
+                max-width: 95%;
+            }
             .progress_status {
                 margin-top: 1rem;
             }
@@ -141,6 +144,8 @@
             var good_socket = false;
             var fee_modified = false;
             var page_loaded = false;
+            var displaying_active_contracts_lender = false;
+            var displaying_active_contracts_borrower = false;
             sessionStorage.removeItem( "modal_cleared" );
             function getData( url ) {
                 return new Promise( async function( resolve, reject ) {
@@ -229,7 +234,6 @@
                     utxo[ "privkey" ] = privkey;
                     utxo[ "pubkey" ] = pubkey;
                     utxo[ "address" ] = address;
-                    if ( utxo[ "privkey" ] == "6bb308338164335bc945eb5256f8e0b47a6f21991e76a1fff994f331fa5a51ac" ) console.log( utxo );
                     obj.push( utxo );
                 });
                 return( obj );
@@ -336,6 +340,10 @@
                 getting_change = false;
             }
             var init = async () => {
+                if ( !page_loaded ) {
+                    await waitSomeSeconds( 0.5 );
+                    return init();
+                }
                 if ( !$( '.offer' ) ) $( '.nothing_in_orderbook' ).classList.remove( "hidden" );
                 purgeOldContracts();
                 displayActiveContracts();
@@ -529,14 +537,22 @@
                 return result;
             }
 
-            var handle10062 = event => {
-                if ( $( `div[ data-event_id="${event.id}" ]` ) ) {
-                    var offer = $( `div[ data-event_id="${event.id}" ]` );
+            var handle30062 = event => {
+                var identifier = extractIdentifierFromNostrEvent( event );
+                if ( identifier == "no identifier" ) return;
+                if ( $( `div[ data-offer_id="${identifier}" ]` ) ) {
+                    var offer = $( `div[ data-offer_id="${identifier}" ]` );
                     if ( offer.getElementsByClassName( "fill_in_details" )[ 0 ].classList.contains( "hidden" ) ) offer.remove();
                     else return;
                 }
                 var lender = event.pubkey;
+                if ( !isValidJson( event[ "content" ] ) ) return;
                 var content = JSON.parse( event[ "content" ] );
+                if ( !( "min_to_lend" in content ) ) return;
+                if ( !( "max_to_lend" in content ) ) return;
+                if ( !( "fee_to_borrow" in content ) ) return;
+                if ( !( "collateral_for_loan" in content ) ) return;
+                if ( !( "duration_of_loan" in content ) ) return;
                 var div = document.createElement( 'div' );
                 var min_to_lend = content.min_to_lend;
                 var max_to_lend = content.max_to_lend;
@@ -550,12 +566,15 @@
                 } else {
                     max_to_lend = max_to_lend.toLocaleString() + " sats";
                 }
-                div.innerHTML = `<div class="offer bordered">
+                var html = `<div class="offer bordered">
                     <div>You will get: <span><span class="min"></span> - <span class="max"></span></span></div>
                     <div>You must pay: principle plus <span class="fee_to_borrow"></span>%</div>
                     <div>Collateral: <span class="collateral"></span>% principle</div>
-                    <div>Loan duration: <span class="duration_of_loan"></span> months</div>
-                    <div><button class="accept_offer">Accept offer</button></div>
+                    <div>Loan duration: <span class="duration_of_loan"></span> months</div>`;
+                if ( event.pubkey == pubKey ) html += `<div><button class="cancel_offer" onclick="cancelOffer( this.parentElement.parentElement.getAttribute( 'data-offer_id' ) );">Cancel offer</button></div>`;
+                if ( event.pubkey == pubKey ) html += `<div><button class="accept_offer" style="display: none;">Accept offer</button></div>`;
+                else html += `<div><button class="accept_offer">Accept offer</button></div>`;
+                html += `
                     <div class="fill_in_details hidden">
                         <p>
                             Enter how many sats you want to borrow (use sats and no decimal points)
@@ -568,9 +587,10 @@
                         </p>
                     </div>
                 </div>`;
+                div.innerHTML = html;
                 div.getElementsByClassName( "offer" )[ 0 ].setAttribute( "data-timestamp", Math.floor( Date.now() / 1000 ) );
                 div.getElementsByClassName( "offer" )[ 0 ].setAttribute( "data-pubkey", lender );
-                div.getElementsByClassName( "offer" )[ 0 ].setAttribute( "data-event_id", event.id );
+                div.getElementsByClassName( "offer" )[ 0 ].setAttribute( "data-offer_id", identifier );
                 div.getElementsByClassName( "min" )[ 0 ].setAttribute( "data-minval", min_to_lend );
                 div.getElementsByClassName( "min" )[ 0 ].innerText = min_to_lend;
                 div.getElementsByClassName( "max" )[ 0 ].setAttribute( "data-maxval", max_to_lend );
@@ -624,7 +644,7 @@
                     var message_for_lender = {
                         msg_type: "accept",
                         msg: {
-                            "offer": event.id,
+                            "offer": identifier,
                             "utxos": utxos_for_this_transaction,
                             "principle": principle,
                             "recovery": recovery_address,
@@ -643,8 +663,12 @@
                     };
                     var signedOffer = await getSignedEvent(offerEvent, privKey);
                     socket.send(JSON.stringify(['EVENT', signedOffer]));
+                    setTimeout( () => {
+                        if ( !sessionStorage[ "lender_replied" ] ) return showModal( `Aborting because the lender did not reply in a timely manner. Please try again` );
+                        else sessionStorage.removeItem( "lender_replied" );
+                    }, 15000 );
                     message_for_lender[ "original_offer" ] = content;
-                    my_accepts[ event.id ] = message_for_lender;
+                    my_accepts[ identifier ] = message_for_lender;
                 }
                 $( '.nothing_in_orderbook' ).classList.add( "hidden" );
                 $( '.orderbook' ).append( div );
@@ -679,7 +703,7 @@
             var handle4 = ( content, borrower ) => {
                 var is_valid_json = isValidJson( content );
                 if ( !is_valid_json ) return;
-                json = JSON.parse( content );
+                var json = JSON.parse( content );
                 if ( !( "msg_type" in json ) ) return;
                 if ( !( "msg" in json ) ) return;
                 if ( json[ "msg_type" ] == "accept" ) return handleAccept( JSON.stringify( json[ "msg" ] ), borrower );
@@ -688,11 +712,9 @@
             }
 
             var handleAccept = async ( content, borrower ) => {
-                // var identifier = SHA256( String( Math.random() ) );
                 var is_valid_json = isValidJson( content );
                 if ( !is_valid_json ) return;
-                json = JSON.parse( content );
-                // console.log( identifier, json.length );
+                var json = JSON.parse( content );
                 if ( !( "offer" in json ) ) return;
                 if ( !( "principle" in json ) ) return;
                 if ( !( "recovery" in json ) ) return;
@@ -701,22 +723,17 @@
                 if ( !( "timelock" in json ) ) return;
                 if ( !( "utxos" in json ) ) return;
                 if ( json[ "offer" ].length != 64 || !isValidHex( json[ "offer" ] ) ) return;
-                // console.log( identifier, json.length );
+                var the_offer = json[ "offer" ];
                 if ( !( json[ "offer" ] in my_offers ) ) return;
-                // console.log( identifier, "my_offers:", my_offers, json[ "offer" ], json[ "offer" ] in my_offers );
                 if ( typeof json[ "principle" ] != "number" ) return;
-                // console.log( identifier, json.length );
                 if ( json[ "principle" ] > my_offers[ json[ "offer" ] ][ "max_to_lend" ] ) return;
                 if ( json[ "principle" ] < my_offers[ json[ "offer" ] ][ "min_to_lend" ] ) return;
                 if ( !isValidAddress( json[ "recovery" ] ) ) return;
-                // console.log( identifier, json.length );
                 if ( !isValidAddress( json[ "principle_address" ] ) ) return;
                 if ( typeof json[ "timelock" ] != "number" ) return;
-                // console.log( identifier, 0, json.length );
                 var current_blockheight = await getBlockheight( "" );
-                // console.log( identifier, 1, json.length );
                 if ( json.length ) return;
-                // console.log( identifier, "my_offers:", my_offers, json[ "offer" ], json[ "offer" ] in my_offers );
+                if ( json[ "offer" ] != the_offer ) return;
                 var expected_timelock = my_offers[ json[ "offer" ] ][ "duration_of_loan" ] * 30 * 144 + current_blockheight;
                 if ( $_GET[ "test_short_loans" ] ) expected_timelock = current_blockheight + Number( $_GET[ "test_short_loans" ] );
                 if ( Math.abs( expected_timelock - json[ "timelock" ] ) > 2 ) return console.log( `couldn't agree on timelock. I had: ${expected_timelock}. They had: ${json[ "timelock" ]}. Difference was greater than 2 so no deal.` );
@@ -724,6 +741,7 @@
                 if ( !json[ "utxos" ].length ) return;
                 var sum_of_values = 0;
                 var inputs = [];
+                if ( !( "utxos" in json ) || !json[ "utxos" ] ) return;
                 var i; for ( i=0; i<json[ "utxos" ].length; i++ ) {
                     var utxo = json[ "utxos" ][ i ];
                     var valid = await isUTXOValid( utxo[ "txid" ], utxo[ "vout" ], utxo[ "value" ], utxo[ "address" ], "" );
@@ -738,7 +756,6 @@
                         },
                     });
                 }
-                // console.log( identifier, "offer:", json[ "offer" ], "my offers:", Object.keys( my_offers ), my_offers );
                 var collateral_requirement = json[ "principle" ] * Number( ( my_offers[ json[ "offer" ] ][ "collateral_for_loan" ] / 100 ).toFixed( 2 ) );
                 if ( sum_of_values < collateral_requirement ) return;
                 var borrower_change = sum_of_values - collateral_requirement;
@@ -760,7 +777,6 @@
                 var [ tpubkey, seizure_cblock ] = tapscript.Tap.getPubKey(pubkey, { tree, target: seizure_target });
                 var contract_address = tapscript.Address.p2tr.fromPubKey( tpubkey, 'testnet' );
                 if ( contract_address != json[ "contract" ] ) return;
-                // console.log( identifier, "json still good?", json );
                 var utxos_for_this_transaction = [];
                 utxos.forEach( utxo => {
                     utxos_for_this_transaction.push({
@@ -785,7 +801,6 @@
                 }
                 if ( sum_of_values - json[ "principle" ] != 0 && sum_of_values - json[ "principle" ] < 546 ) return console.log( `Someone tried to make a deal with you but I am aborting. Your utxos are worth ${sum_of_values} sats and the principle is ${collateral_requirement} sats, leaving you with leftover change of ${sum_of_values - json[ "principle" ]} sats, which is less than the dust limit of 546. Add another utxo to resolve this problem.` );
                 var lender_change = sum_of_values - json[ "principle" ];
-                // console.log( identifier, "json still good?", json );
                 var outputs = [];
                 var txsize = 0;
                 inputs.forEach( item => txsize = txsize + 64 + 32 + 8 );
@@ -801,7 +816,6 @@
                 var sats_per_byte = fee_options[ 1 ];
                 sats_per_byte = Number( sats_per_byte );
                 if ( !sats_per_byte ) return console.log( "Someone tried to make a deal with you but there was an error getting fee rates. Aborting, please try again." );
-                // console.log( identifier, "json still good? 0", json );
                 var mining_fee = txsize * sats_per_byte;
                 if ( mining_fee < 172 ) mining_fee = 172;
                 //this first output (vout 0) puts the collateral in the contract
@@ -809,11 +823,10 @@
                     value: collateral_requirement,
                     scriptPubKey: tapscript.Address.toScriptPubKey( contract_address ),
                 });
-                // console.log( identifier, "json still good? 1", json );
                 var amount_for_borrower = json[ "principle" ];
                 if ( borrower_change ) amount_for_borrower = amount_for_borrower + borrower_change - mining_fee;
                 //this second vout (vout 1) gives the principle, and some change if necessary, to the borrower
-                // console.log( identifier, "principle address:", json[ "principle_address" ], json );
+                if ( !( "principle_address" in json ) ) return console.log( "aborting because the json had no principle address:", json );
                 outputs.push({
                     value: amount_for_borrower,
                     scriptPubKey: tapscript.Address.toScriptPubKey( json[ "principle_address" ] ),
@@ -827,7 +840,6 @@
                         scriptPubKey: tapscript.Address.toScriptPubKey( lender_change_address ),
                     });
                 }
-                // console.log( identifier, "json still good? 2", json );
                 var txdata = tapscript.Tx.create({
                     vin: inputs,
                     vout: outputs,
@@ -835,7 +847,6 @@
                 var index_of_my_inputs = txdata[ "vin" ].length - utxos.length;
                 var my_sigs = [];
                 var num = 0;
-                // console.log( identifier, "json still good? 3", json );
                 var i; for ( i=index_of_my_inputs; i<txdata[ "vin" ].length; i++ ) {
                     var [ tseckey ] = tapscript.Tap.getSecKey( utxos[ num ][ "privkey" ] );
                     my_sigs.push( tapscript.Signer.taproot.sign( tseckey, txdata, i ).hex );
@@ -845,7 +856,7 @@
                 }
                 var txhex = tapscript.Tx.encode( txdata ).hex;
                 var txid = tapscript.Tx.util.getTxid( txhex );
-                // console.log( identifier, "json still good? 4", json );
+                if ( !( json[ "offer" ] in my_offers ) ) return console.log( `this offer: ${json[ "offer" ]} was not in my offers: ${my_offers}` );
                 var repayment_value = Math.round( json[ "principle" ] * Number( `1.${my_offers[ json[ "offer" ] ][ "fee_to_borrow" ]}` ) );
                 //each input contributes a 64 byte signature, a 32 byte txid, a 4 byte vout, and 4 extra bytes for padding
                 var txsize = 64 + 32 + 8;
@@ -853,9 +864,8 @@
                 txsize = txsize + 37 * 2;
                 var mining_fee = txsize * sats_per_byte;
                 if ( mining_fee < 172 ) mining_fee = 172;
-                // console.log( identifier, "json still good? 5", json );
+                if ( !( "recovery" in json ) ) return console.log( "recovery address had no recovery address:", json );
                 var repayment_address = await alt_getFirstUnusedReceiveAddress( backup_words, "testnet/" );
-                // console.log( identifier, "recovery:", json[ "recovery" ], json );
                 var repayment_txdata = tapscript.Tx.create({
                     vin: [{
                         txid: txid,
@@ -926,7 +936,7 @@
             var handleFinalize = async ( content, lender ) => {
                 var is_valid_json = isValidJson( content );
                 if ( !is_valid_json ) return;
-                json = JSON.parse( content );
+                var json = JSON.parse( content );
                 if ( !( "offer" in json ) ) return;
                 if ( !( "swap_sigs" in json ) ) return;
                 if ( !( "repay_sig" in json ) ) return;
@@ -958,8 +968,10 @@
                 var collateral_requirement = principle * Number( ( my_accepts[ json[ "offer" ] ][ "original_offer" ][ "collateral_for_loan" ] / 100 ).toFixed( 2 ) );
                 var borrower_change = sum_of_values - collateral_requirement;
                 var sum_of_values = 0;
+                if ( !( "utxos" in json ) ) return;
                 showProgress( 4, 7, `validating lender's utxos` );
                 console.log( `step 4 of 6, validating lender's utxos` );
+                sessionStorage[ "lender_replied" ] = true;
                 var i; for ( i=0; i<json[ "utxos" ].length; i++ ) {
                     var utxo = json[ "utxos" ][ i ];
                     var valid = await isUTXOValid( utxo[ "txid" ], utxo[ "vout" ], utxo[ "value" ], utxo[ "address" ], "" );
@@ -1177,7 +1189,25 @@
                     var key = Object.keys( my_offers )[ i ];
                     var item = my_offers[ key ];
                     if ( !( "timestamp" in item ) || item[ "timestamp" ] < now_minus_ten ) {
+                        var offer = JSON.parse( JSON.stringify( my_offers[ key ] ) );
                         delete my_offers[ key ];
+                        sessionStorage[ "my_offers" ] = JSON.stringify( my_offers );
+                        if ( "private" in offer ) continue;
+                        delete offer[ "timestamp" ];
+                        var btc_holdings = 0;
+                        utxos.forEach(  utxo => btc_holdings = btc_holdings + utxo[ "amount" ] );
+                        offer[ "max_to_lend" ] = btc_holdings;
+                        var offerEvent = {
+                            content: JSON.stringify( offer ),
+                            created_at: Math.floor( Date.now() / 1000 ),
+                            kind: 30062,
+                            tags: [ [ "d", key ] ],
+                            pubkey: pubKey,
+                        };
+                        var signedOffer = await getSignedEvent( offerEvent, privKey );
+                        socket.send(JSON.stringify(['EVENT', signedOffer]));
+                        offer[ "timestamp" ] = Math.floor( Date.now() / 1000 );
+                        my_offers[ key ] = offer;
                         sessionStorage[ "my_offers" ] = JSON.stringify( my_offers );
                     }
                 }
@@ -1195,9 +1225,18 @@
                 });
                 var current_blockheight = await getBlockheight( "" );
                 Object.keys( ready_to_finish_lender ).forEach( async ( item, index ) => {
+                    if ( item == undefined || item == "undefined" ) {
+                        delete ready_to_finish_lender[ item ];
+                        return;
+                    }
+                    if ( !ready_to_finish_lender[ item ][ 5 ] ) {
+                        delete ready_to_finish_lender[ item ];
+                        return;
+                    }
                     var contract = ready_to_finish_lender[ item ][ 5 ];
                     var contract_started = await addressOnceHadMoney( contract, "" );
                     if ( current_blockheight > ready_to_finish_lender[ item ][ 0 ] && !contract_started ) {
+                        if ( !( item in ready_to_finish_lender ) ) return;
                         delete ready_to_finish_lender[ item ];
                         sessionStorage[ "ready_to_finish_lender" ] = JSON.stringify( ready_to_finish_lender );
                         return;
@@ -1221,9 +1260,11 @@
             }
 
             var displayActiveContracts = async () => {
+                if ( displaying_active_contracts_borrower ) return;
+                displaying_active_contracts_borrower = true;
                 if ( Object.keys( ready_to_finish ).length ) {
                     $( '.active_contracts_div' ).classList.remove( "hidden" );
-                    if ( $( '.modal' ) && !$( '.modal' ).classList.contains( "hidden" ) ) {
+                    if ( $( '.modal' ) && !$( '.modal' ).classList.contains( "hidden" ) && $( '.modal' ).innerHTML.includes( "progressOutline" ) ) {
                         showProgress( 7, 7, `done` );
                         await waitSomeSeconds( 2 );
                         $( '.x_modal' ).click();
@@ -1232,21 +1273,30 @@
                     $( '.active_contracts' ).innerHTML = "";
                     $( '.active_contracts_div' ).classList.add( "hidden" );
                 }
+                var current_blockheight = await getBlockheight( "" );
+                var div_0 = document.createElement( "div" );
                 var i; for ( i=0; i<Object.keys( ready_to_finish ).length; i++ ) {
                     var item = Object.keys( ready_to_finish )[ i ];
                     var contract = ready_to_finish[ item ][ 1 ][ "msg" ][ "contract" ];
+                    var address_once_sent_money = await addressOnceSentMoney( contract, "" );
+                    if ( address_once_sent_money ) continue;
+                    var address_once_had_money = await addressOnceHadMoney( contract, "" );
+                    if ( !address_once_had_money ) continue;
                     var principle = ready_to_finish[ item ][ 1 ][ "msg" ][ "principle" ];
                     var timelock = ready_to_finish[ item ][ 1 ][ "msg" ][ "timelock" ];
                     var fee_to_borrow = ready_to_finish[ item ][ 1 ][ "original_offer" ][ "fee_to_borrow" ];
                     var duration_of_loan = ready_to_finish[ item ][ 1 ][ "original_offer" ][ "duration_of_loan" ];
                     var repayment_value = Math.round( principle * Number( `1.${fee_to_borrow}` ) );
+                    var due_timestamp = estimateTimestampBasedOnBlockheight( timelock, current_blockheight );
+                    var due_date = new Date( due_timestamp * 1000 ).toLocaleDateString();
                     var my_balance = await getBalanceFromUtxos( utxos );
+                    var time_left = timelock - current_blockheight;
+                    var time_left_hr_version = convertHMS( time_left * 10 * 60 );
                     var enough_or_not = "";
-                    var pay_it_off = "";
+                    var pay_it_off = `-- <span class="top_up" style="color: blue; text-decoration: underline; cursor: pointer;" onclick="$( '.receive' ).click()">top up</span>`;
                     var utxos_for_this_transaction = ready_to_finish[ item ][ 1 ][ "msg" ][ "utxos" ];
                     if ( repayment_value > my_balance ) enough_or_not = "not ";
                     else pay_it_off = `-- <span class="pay_it_off" data-ins_and_outs="${textToHex( JSON.stringify( ready_to_finish[ item ][ 0 ] ) )}" data-lender="${ready_to_finish[ item ][ 2 ]}" data-lenders_sig="${ready_to_finish[ item ][ 3 ]}" data-custom_utxo="${utxos_for_this_transaction[ 0 ][ "txid" ] + utxos_for_this_transaction[ 0 ][ "vout" ]}" data-duration_of_loan="${duration_of_loan}" style="color: blue; text-decoration: underline; cursor: pointer;">Pay it off</span>`;
-                    var current_blockheight = await getBlockheight( "" );
                     var time_left = Number( item ) - current_blockheight;
                     var block_or_blocks = "blocks";
                     if ( time_left == 1 ) block_or_blocks = "block";
@@ -1256,16 +1306,17 @@
                     html = html + `<p>Principle: ${principle} sats</p>`;
                     html = html + `<p>Fee you'll pay: ${fee_to_borrow}% (i.e. ${repayment_value - principle} sats)</p>`;
                     html = html + `<p>You have: ${my_balance} sats, which is ${enough_or_not}enough ${pay_it_off}</p>`;
-                    html = html + `<p>Repay before this block: block ${item}</p>`;
+                    html = html + `<p>Repay before this block: block ${item} (~${due_date})</p>`;
                     html = html + `<p>Current block: block ${current_blockheight}</p>`;
-                    html = html + `<p>Time left: ${time_left} ${block_or_blocks}</p>`;
-                    if ( !i ) $( '.active_contracts' ).innerHTML = "";
+                    html = html + `<p>Time left: ${time_left} ${block_or_blocks} (~${time_left_hr_version})</p>`;
                     var div = document.createElement( "div" );
                     div.classList.add( "active_contract" );
                     div.classList.add( "bordered" );
                     div.innerHTML = html;
-                    $( '.active_contracts' ).append( div );
+                    div_0.append( div );
                 }
+                if ( div_0.childNodes.length ) $( '.active_contracts' ).innerHTML = "";
+                $( '.active_contracts' ).innerHTML = div_0.innerHTML;
                 $$( '.pay_it_off' ).forEach( item => {
                     item.onclick = async e => {
                         var ins_and_outs = JSON.parse( hexToText( e.target.getAttribute( "data-ins_and_outs" ) ) );
@@ -1341,9 +1392,11 @@
                         }
                         var txhex = tapscript.Tx.encode( repayment_txdata ).hex;
                         var txid = await pushBTCpmt( txhex, "" );
-                        return showModal( `Success! Here is your txid: <a href="https://mutinynet.com/tx/${txid}" target="_blank">https://mutinynet.com/tx/${txid}</a>` );
+                        if ( txid.includes( "error" ) ) return showModal( `<p>Oh no! There was an error with your transaction, please try again. Here is the error message:</p><p>${txid}</p><p>Hint: if you tried to pay off a loan right after making it, you should probably wait a few minutes for your utxo set to update. It often takes about 2 minutes and it may say "you have 0 sats" for a little bit too before it updates.</p>` );
+                        showModal( `Success! Here is your txid: <a href="https://mutinynet.com/tx/${txid}" target="_blank">https://mutinynet.com/tx/${txid}</a>` );
                     }
                 });
+                displaying_active_contracts_borrower = false;
             }
 
             function textToHex( text ) {
@@ -1361,6 +1414,8 @@
             }
 
             var displayActiveContractsLender = async () => {
+                if ( displaying_active_contracts_lender ) return;
+                displaying_active_contracts_lender = true;
                 if ( Object.keys( ready_to_finish_lender ).length ) {
                     var an_addy_had_money_and_didnt_send_it_yet = false;
                     var i; for ( i=0; i<Object.keys( ready_to_finish_lender ).length; i++ ) {
@@ -1368,12 +1423,11 @@
                         var address = ready_to_finish_lender[ item ][ 5 ];
                         var address_once_sent_money = await addressOnceSentMoney( address, "" );
                         if ( address_once_sent_money ) continue;
-                        var address_once_had_money = await addressOnceHadMoney( address,"" );
+                        var address_once_had_money = await addressOnceHadMoney( address, "" );
                         if ( !address_once_had_money ) continue;
                         an_addy_had_money_and_didnt_send_it_yet = true;
                     }
                     if ( an_addy_had_money_and_didnt_send_it_yet ) {
-                        ready_to_finish_lender[ Object.keys( ready_to_finish_lender) ][ 5 ]
                         $( '.active_contracts_lender_div' ).classList.remove( "hidden" );
                     }
                 }
@@ -1381,10 +1435,17 @@
                     $( '.active_contracts_lender' ).innerHTML = "";
                     $( '.active_contracts_lender_div' ).classList.add( "hidden" );
                 }
+                var current_blockheight = await getBlockheight( "" );
+                var div_0 = document.createElement( "div" );
                 var i; for ( i=0; i<Object.keys( ready_to_finish_lender ).length; i++ ) {
                     var item = Object.keys( ready_to_finish_lender )[ i ];
                     var contract = ready_to_finish_lender[ item ][ 5 ];
+                    var address_once_sent_money = await addressOnceSentMoney( contract, "" );
+                    if ( address_once_sent_money ) continue;
+                    var address_once_had_money = await addressOnceHadMoney( contract, "" );
+                    if ( !address_once_had_money ) continue;
                     var accept_msg = ready_to_finish_lender[ item ][ 6 ];
+                    if ( !ready_to_finish_lender[ item ][ 7 ] ) continue;
                     var original_offer = ready_to_finish_lender[ item ][ 7 ];
                     var borrower = ready_to_finish_lender[ item ][ 8 ];
                     var original_offer_id = ready_to_finish_lender[ item ][ 9 ];
@@ -1393,11 +1454,14 @@
                     try {
                         var fee_to_borrow = original_offer[ "fee_to_borrow" ];
                     } catch( e ) {
-                        $( '.active_contracts_lender' ).innerHTML = "";
-                        $( '.active_contracts_lender_div' ).classList.add( "hidden" );
-                        if ( original_offer_id ) return showModal( `Someone tried to take one of your offers but you got rid of it -- this one: ${original_offer_id}` );
-                        if ( !my_offers.length ) 
-                            return showModal( `unknown error, please refresh your browser. If this error persists, ask a developer for help.` );
+                        if ( original_offer_id ) {
+                            console.log( `Someone tried to take one of your offers but you got rid of it -- this one: ${original_offer_id}` );
+                            continue;
+                        }
+                        if ( !Object.keys( my_offers ).length ) {
+                            console.log( `unknown error, please refresh your browser. If this error persists, ask a developer for help.` );
+                            continue;
+                        }
                     }
                     var duration_of_loan = original_offer[ "duration_of_loan" ];
                     var collateral_for_loan = original_offer[ "collateral_for_loan" ];
@@ -1405,15 +1469,27 @@
                     var repayment_value = Math.round( principle * Number( `1.${fee_to_borrow}` ) );
                     var my_balance = await getBalanceFromUtxos( utxos );
                     var txinfo = await addressReceivedMoneyInThisTx( contract, "" );
-                    if ( !txinfo[ 0 ] ) {
-                        $( '.active_contracts_lender' ).innerHTML = "";
-                        $( '.active_contracts_lender_div' ).classList.add( "hidden" );
-                        return;
+                    //I ensured purgeOldContracts removes contracts where the borrower never deposited
+                    //but only after the timelock expires -- otherwise they could deposit money there after
+                    //waiting til I am likely to delete the contract, and I will never get my money back
+                    if ( !txinfo[ 0 ] ) continue;
+                    var received_info = await getData( `https://mutinynet.com/api/tx/${txinfo[ 0 ]}` );
+                    var received_status = JSON.parse( received_info )[ "status" ];
+                    if ( received_status && "block_height" in received_status ) {
+                        var received_block = received_status[ "block_height" ];
+                        // var received_hr_timestamp = estimateTimestampBasedOnBlockheight( received_block, current_blockheight );
+                        var received_hr_timestamp = received_status[ "block_time" ];
+                        var received_date = new Date( received_hr_timestamp * 1000 ).toLocaleDateString();
+                    } else {
+                        var received_block = current_blockheight;
+                        var received_date = new Date().toLocaleDateString();
                     }
                     var blocks_since_confirmed = await howManyConfs( txinfo[ 0 ], "" );
-                    var current_blockheight = await getBlockheight( "" );
-                    if ( !( item in ready_to_finish_lender ) ) return;
+                    var due_timestamp = estimateTimestampBasedOnBlockheight( timelock, current_blockheight );
+                    var due_date = new Date( due_timestamp * 1000 ).toLocaleDateString();
+                    if ( !( item in ready_to_finish_lender ) ) continue;
                     var time_left = timelock - current_blockheight;
+                    var time_left_hr_version = convertHMS( time_left * 10 * 60 );
                     var real_time_left = Number( String( time_left ) );
                     var block_or_blocks = "blocks";
                     if ( time_left == 1 ) block_or_blocks = "block";
@@ -1427,18 +1503,20 @@
                     html = html + `<p>You currently have: ${my_balance} sats</p>`;
                     html = html + `<p>You will have: ${my_balance + repayment_value} sats</p>`;
                     html = html + `<p>Or: ${my_balance + collateral_requirement} sats (if the borrower fails to pay)</p>`;
-                    html = html + `<p>When payment is due: block ${current_blockheight + real_time_left}</p>`;
+                    html = html + `<p>Contract was created in: block ${received_block} (~${received_date})</p>`;
+                    html = html + `<p>When payment is due: block ${timelock} (~${due_date})</p>`;
                     html = html + `<p>Current block: block ${current_blockheight}</p>`;
-                    html = html + `<p>Time til then: ${time_left} ${block_or_blocks}</p>`;
+                    html = html + `<p>Time til then: ${time_left} ${block_or_blocks} (~${time_left_hr_version})</p>`;
                     if ( !time_left ) html = html + `<p>Time's up! <span class="take_collateral" data-can_or_cant="can" data-vin="${textToHex( JSON.stringify( ready_to_finish_lender[ item ][ 1 ] ) )}" data-borrower="${borrower}" data-custom_utxo="${utxos_for_this_transaction[ 0 ][ "txid" ] + utxos_for_this_transaction[ 0 ][ "vout" ]}" data-timelock="${timelock}" data-target="${ready_to_finish_lender[ item ][ 2 ]}" data-script="${textToHex( JSON.stringify( ready_to_finish_lender[ item ][ 3 ] ) )}" data-cblock="${ready_to_finish_lender[ item ][ 4 ]}" style="color: blue; text-decoration: underline; cursor: pointer;">Take the collateral</span></p>`;
                     else html = html + `<p>You can't <span class="take_collateral" data-can_or_cant="cant" data-vin="${textToHex( JSON.stringify( ready_to_finish_lender[ item ][ 1 ] ) )}" data-borrower="${borrower}" data-custom_utxo="${utxos_for_this_transaction[ 0 ][ "txid" ] + utxos_for_this_transaction[ 0 ][ "vout" ]}" data-timelock="${timelock}" data-target="${ready_to_finish_lender[ item ][ 2 ]}" data-script="${textToHex( JSON.stringify( ready_to_finish_lender[ item ][ 3 ] ) )}" data-cblock="${ready_to_finish_lender[ item ][ 4 ]}" style="color: blue; text-decoration: underline; cursor: pointer;">take the collateral</span> til the borrower runs out of time to repay you, but you can try anyway</p>`;
-                    if ( !i ) $( '.active_contracts_lender' ).innerHTML = "";
                     var div = document.createElement( "div" );
+                    div.setAttribute( "data-contract", contract );
                     div.classList.add( "active_contract_lender" );
                     div.classList.add( "bordered" );
                     div.innerHTML = html;
-                    $( '.active_contracts_lender' ).append( div );
+                    div_0.append( div );
                 }
+                if ( div_0.children.length ) $( '.active_contracts_lender' ).innerHTML = div_0.innerHTML;
                 $$( '.take_collateral' ).forEach( item => {
                     item.onclick = async e => {
                         var can_or_cant = e.target.getAttribute( "data-can_or_cant" );
@@ -1500,6 +1578,7 @@
                         } else return showModal( `<p>Go here: <a href="https://mutinynet.com/tx/push" target="_blank">https://mutinynet.com/tx/push</a></p><p>And try to broadcast this transaction:</p><p>${txhex}</p>` );
                     }
                 });
+                displaying_active_contracts_lender = false;
             }
 
             async function postData( url, json, content_type = "", apikey = "" ) {
@@ -1660,6 +1739,7 @@
                 var borrow_profits = 0;
                 var borrow_losses = 0;
                 var html_for_historical_borrows = document.createElement( "div" );
+                var current_blockheight = await getBlockheight( "" );
                 var i; for ( i=0; i<Object.keys( user_history[ "borrow_history" ] ).length; i++ ) {
                     var item = Object.keys( user_history[ "borrow_history" ] )[ i ];
                     var contract = user_history[ "borrow_history" ][ item ][ "msg" ][ "contract" ];
@@ -1670,25 +1750,43 @@
                     var collateral_for_loan = user_history[ "borrow_history" ][ item ][ "original_offer" ][ "collateral_for_loan" ];
                     var collateral_requirement = principle * Number( ( collateral_for_loan / 100 ).toFixed( 2 ) );
                     var repayment_value = Math.round( principle * Number( `1.${fee_to_borrow}` ) );
+                    var due_timestamp = estimateTimestampBasedOnBlockheight( timelock, current_blockheight );
+                    var due_date = new Date( due_timestamp * 1000 ).toLocaleDateString();
                     var txinfo = await addressReceivedMoneyInThisTx( contract, "" );
                     if ( !txinfo[ 0 ] ) continue;
+                    var received_info = await getData( `https://mutinynet.com/api/tx/${txinfo[ 0 ]}` );
+                    var received_status = JSON.parse( received_info )[ "status" ];
+                    if ( received_status && "block_height" in received_status ) {
+                        var received_block = received_status[ "block_height" ];
+                        // var received_hr_timestamp = estimateTimestampBasedOnBlockheight( received_block, current_blockheight );
+                        var received_hr_timestamp = received_status[ "block_time" ];
+                        var received_date = new Date( received_hr_timestamp * 1000 ).toLocaleDateString();
+                    } else {
+                        var received_block = current_blockheight;
+                        var received_date = new Date().toLocaleDateString();
+                    }
                     var status = "in progress";
                     var txid_of_spending_tx = await addressSentMoneyInThisTx( contract, txinfo[ 0 ], "" );
                     if ( txid_of_spending_tx ) status = "paid off";
                     if ( txid_of_spending_tx ) var more_info = await getData( `https://mutinynet.com/api/tx/${txid_of_spending_tx}` );
                     if ( more_info ) var amount_sent = JSON.parse( more_info )[ "vout" ][ 0 ][ "value" ];
                     if ( more_info ) var tx_status = JSON.parse( more_info )[ "status" ];
-                    if ( tx_status && "block_height" in tx_status ) tx_status = tx_status[ "block_height" ];
-                    else tx_status = "the transaction is in the mempool and will be settled when it confirms";
-                    //TODO: the following line assumes that if the amount_sent is more than the repayment
+                    if ( tx_status && "block_height" in tx_status ) {
+                        var settlement_block = tx_status[ "block_height" ];
+                        // var settlement_hr_timestamp = estimateTimestampBasedOnBlockheight( settlement_block, current_blockheight );
+                        var settlement_hr_timestamp = tx_status[ "block_time" ];
+                        var settlement_date = new Date( settlement_hr_timestamp * 1000 ).toLocaleDateString();
+                        var settlement_text = `block ${settlement_block} (~${settlement_date})`;
+                    } else var settlement_text = "the transaction is in the mempool and will be settled when it confirms";
+                    //TODO: the following lines assume that if the amount_sent is more than the repayment
                     //value then the lender got the collateral. But that will not necessarily be true if
-                    //the collateral_requirement was only 100% of the repayment_value. Fix that assumption.
-                    if ( amount_sent && amount_sent > repayment_value ) status = "took collateral";
+                    //the collateral_requirement was 100% of the repayment_value or less. Fix that assumption.
+                    if ( txid_of_spending_tx && amount_sent && amount_sent > repayment_value ) status = "took collateral";
                     if ( amount_sent && amount_sent > repayment_value ) var losses_on_this_loan = collateral_requirement - principle;
                     if ( amount_sent && amount_sent <= repayment_value ) var losses_on_this_loan = repayment_value - principle;
-                    if ( amount_sent ) borrow_losses = borrow_losses + losses_on_this_loan;
-                    var current_blockheight = await getBlockheight( "" );
+                    if ( amount_sent && status != "in progress" ) borrow_losses = borrow_losses + losses_on_this_loan;
                     var time_left = timelock - current_blockheight;
+                    var time_left_hr_version = convertHMS( time_left * 10 * 60 );
                     var block_or_blocks = "blocks";
                     if ( time_left == 1 ) block_or_blocks = "block";
                     if ( time_left < 1 ) time_left = 0;
@@ -1699,11 +1797,12 @@
                     if ( status == "paid off" ) html = html + `<p>Fee you paid: ${fee_to_borrow}% (i.e. ${repayment_value - principle} sats)</p>`;
                     if ( status == "took collateral" ) html = html + `<p>You did not repay, so they took your collateral, which was: ${collateral_requirement} sats</p>`;
                     if ( status != "in progress" ) html = html + `<p>Losses on this loan: ${losses_on_this_loan} sats</p>`;
-                    if ( status == "in progress" ) html = html + `<p>Repay before this block: block ${timelock}</p>`;
-                    else html = html + `<p>When payment was due: block ${timelock}</p>`;
+                    html = html + `<p>Contract was created in: block ${received_block} (~${received_date})</p>`;
+                    if ( status == "in progress" ) html = html + `<p>Repay before this block: block ${timelock} (~${due_date})</p>`;
+                    else html = html + `<p>When payment was due: block ${timelock} (~${due_date})</p>`;
                     if ( status == "in progress" ) html = html + `<p>Current block: block ${current_blockheight}</p>`;
-                    else html = html + `<p>When contract settled: block ${tx_status}</p>`;
-                    if ( status == "in progress" ) html = html + `<p>Time left: ${time_left} ${block_or_blocks}</p>`;
+                    else html = html + `<p>When contract settled: ${settlement_text}</p>`;
+                    if ( status == "in progress" ) html = html + `<p>Time left: ${time_left} ${block_or_blocks} (~${time_left_hr_version})</p>`;
                     if ( !i ) html_for_historical_borrows.innerHTML = "";
                     var div = document.createElement( "div" );
                     div.classList.add( "historical_contract" );
@@ -1716,6 +1815,7 @@
                 var loan_profits = 0;
                 var loan_losses = 0;
                 var html_for_historical_loans = document.createElement( "div" );
+                var current_blockheight = await getBlockheight( "" );
                 var i; for ( i=0; i<Object.keys( user_history[ "loan_history" ] ).length; i++ ) {
                     var item = Object.keys( user_history[ "loan_history" ] )[ i ];
                     var contract = user_history[ "loan_history" ][ item ][ 0 ];
@@ -1733,24 +1833,42 @@
                     var repayment_value = Math.round( principle * Number( `1.${fee_to_borrow}` ) );
                     var txinfo = await addressReceivedMoneyInThisTx( contract, "" );
                     if ( !txinfo[ 0 ] ) continue;
+                    var received_info = await getData( `https://mutinynet.com/api/tx/${txinfo[ 0 ]}` );
+                    var received_status = JSON.parse( received_info )[ "status" ];
+                    if ( received_status && "block_height" in received_status ) {
+                        var received_block = received_status[ "block_height" ];
+                        // var received_hr_timestamp = estimateTimestampBasedOnBlockheight( received_block, current_blockheight );
+                        var received_hr_timestamp = received_status[ "block_time" ];
+                        var received_date = new Date( received_hr_timestamp * 1000 ).toLocaleDateString();
+                    } else {
+                        var received_block = current_blockheight;
+                        var received_date = new Date().toLocaleDateString();
+                    }
                     var status = "in progress";
                     var txid_of_spending_tx = await addressSentMoneyInThisTx( contract, txinfo[ 0 ], "" );
                     if ( txid_of_spending_tx ) status = "paid off";
                     if ( txid_of_spending_tx ) var more_info = await getData( `https://mutinynet.com/api/tx/${txid_of_spending_tx}` );
                     if ( more_info ) var amount_sent = JSON.parse( more_info )[ "vout" ][ 0 ][ "value" ];
                     if ( more_info ) var tx_status = JSON.parse( more_info )[ "status" ];
-                    if ( tx_status && "block_height" in tx_status ) tx_status = tx_status[ "block_height" ];
-                    else tx_status = "the transaction is in the mempool and will be settled when it confirms";
-                    //TODO: the following line assumes that if the amount_sent is more than the repayment
+                    if ( tx_status && "block_height" in tx_status ) {
+                        var settlement_block = tx_status[ "block_height" ];
+                        // var settlement_hr_timestamp = estimateTimestampBasedOnBlockheight( settlement_block, current_blockheight );
+                        var settlement_hr_timestamp = tx_status[ "block_time" ];
+                        var settlement_date = new Date( settlement_hr_timestamp * 1000 ).toLocaleDateString();
+                        var settlement_text = `block ${settlement_block} (~${settlement_date})`;
+                    } else settlement_text = "the transaction is in the mempool and will be settled when it confirms";
+                    //TODO: the following lines assume that if the amount_sent is more than the repayment
                     //value then the lender got the collateral. But that will not necessarily be true if
-                    //the collateral_requirement was only 100% of the repayment_value. Fix that assumption.
-                    if ( amount_sent && amount_sent > repayment_value ) status = "took collateral";
+                    //the collateral_requirement was 100% of the repayment_value or less. Fix that assumption.
+                    if ( txid_of_spending_tx && amount_sent && amount_sent > repayment_value ) status = "took collateral";
                     if ( amount_sent && amount_sent > repayment_value ) var profits_on_this_loan = collateral_requirement - principle;
                     if ( amount_sent && amount_sent <= repayment_value ) var profits_on_this_loan = repayment_value - principle;
-                    if ( amount_sent ) loan_profits = loan_profits + profits_on_this_loan;
+                    if ( amount_sent && status != "in progress" ) loan_profits = loan_profits + profits_on_this_loan;
                     var blocks_since_confirmed = await howManyConfs( txinfo[ 0 ], "" );
-                    var current_blockheight = await getBlockheight( "" );
+                    var due_timestamp = estimateTimestampBasedOnBlockheight( timelock, current_blockheight );
+                    var due_date = new Date( due_timestamp * 1000 ).toLocaleDateString();
                     var time_left = timelock - current_blockheight;
+                    var time_left_hr_version = convertHMS( time_left * 10 * 60 );
                     var real_time_left = Number( String( time_left ) );
                     var block_or_blocks = "blocks";
                     if ( time_left == 1 ) block_or_blocks = "block";
@@ -1759,15 +1877,17 @@
                     var html = ``;
                     html = html + `<p>Contract: ${contract}</p>`;
                     html = html + `<p>Principle: ${principle} sats</p>`;
-                    if ( status == "in progress" ) html = html + `<p>Fee you'll earn: ${fee_to_borrow}% (i.e. ${repayment_value} sats)</p>`;
+                    if ( status == "in progress" ) html = html + `<p>Fee you'll earn: ${fee_to_borrow}% (i.e. ${repayment_value - principle} sats)</p>`;
+                    if ( status == "in progress" ) html = html + `<p>Or you'll get: ${collateral_requirement} sats (if the borrower fails to pay)</p>`;
                     if ( status == "paid off" ) html = html + `<p>Fee you earned: ${fee_to_borrow}% (i.e. ${repayment_value - principle} sats)</p>`;
                     if ( status == "took collateral" ) html = html + `<p>They did not repay, so you took their collateral, which was: ${collateral_requirement} sats</p>`;
                     if ( status != "in progress" ) html = html + `<p>Profits on this loan: ${profits_on_this_loan} sats</p>`;
-                    if ( status == "in progress" ) html = html + `<p>When payment is due: block ${current_blockheight + real_time_left}</p>`;
-                    else html = html + `<p>When payment was due: block ${current_blockheight + real_time_left}</p>`;
+                    html = html + `<p>Contract was created in: block ${received_block} (~${received_date})</p>`;
+                    if ( status == "in progress" ) html = html + `<p>When payment is due: block ${timelock} (~${due_date})</p>`;
+                    else html = html + `<p>When payment was due: block ${timelock} (~${due_date})</p>`;
                     if ( status == "in progress" ) html = html + `<p>Current block: block ${current_blockheight}</p>`;
-                    else html = html + `<p>When contract settled: block ${tx_status}</p>`;
-                    if ( status == "in progress" ) html = html + `<p>Time til then: ${time_left} ${block_or_blocks}</p>`;
+                    else html = html + `<p>When contract settled: ${settlement_text}</p>`;
+                    if ( status == "in progress" ) html = html + `<p>Time til then: ${time_left} ${block_or_blocks} (~${time_left_hr_version})</p>`;
                     if ( !i ) html_for_historical_loans.innerHTML = "";
                     var div = document.createElement( "div" );
                     div.classList.add( "historical_contract_lender" );
@@ -1825,10 +1945,88 @@
                 dataUriPngImage.style.width = "100%";
                 return dataUriPngImage;
             }
+            function convertHMS( value ) {
+                if ( value < 0 ) value = 0;
+                var sec = parseInt(value, 10); // convert value to number if it's string
+                var years = Math.round(sec / 31536000); // get years
+                var months = Math.round((sec - (years * 31536000)) / 2592000); // get months
+                var days = Math.round((sec - (years * 31536000) - (months * 2592000)) / 86400); // get days
+                var hours = Math.round((sec - (years * 31536000) - (months * 2592000) - (days * 86400)) / 3600); // get hours
+                var minutes = Math.floor((sec - (years * 31536000) - (months * 2592000) - (days * 86400) - (hours * 3600)) / 60); // get minutes
+                var seconds = sec - (years * 31536000) - (months * 2592000) - (days * 86400) - (hours * 3600) - (minutes * 60); //  get seconds
+                var yearsstring = (years > 1) ? `years`:`year`;
+                var monthsstring = (months > 1) ?  `months`:`month`;
+                var daysstring = (days > 1) ? `days`:`day`;
+                var hoursstring = (hours > 1) ? `hours`:`hour`;
+                var minutesstring = (minutes > 1) ? `minutes`:`minute`;
+                var secondsstring = (seconds > 1) ? `seconds`:`second`;
+                if ( years > 0 ) return `${years} ${yearsstring}`;
+                if ( months > 0 ) return `${months} ${monthsstring}`;
+                if ( days > 0 ) return `${days} ${daysstring}`;
+                if ( hours > 0 ) return `${hours} ${hoursstring}`;
+                if ( minutes > 0 ) return `${minutes} ${minutesstring}`;
+                if ( seconds == 0 ) `${seconds} seconds`;
+                return `${seconds} ${secondsstring}`;
+            }
+            var estimateTimestampBasedOnBlockheight = ( blockheight, current_blockheight ) => {
+                var now = Math.floor( Date.now() / 1000 );
+                var ten_minute_segments = current_blockheight - blockheight;
+                var seconds = ten_minute_segments * 10 * 60;
+                if ( seconds < 0 ) return now + Math.abs( seconds );
+                return now - seconds;
+            }
+            var extractRecipientFromNostrEvent = event => {
+                var recipient = null;
+                event.tags.every( item => {
+                    if ( item[ 0 ] == "p" ) {
+                        recipient = item[ 1 ];
+                        return;
+                    }
+                    return true;
+                });
+                if ( recipient ) return recipient;
+                return "no recipient";
+            }
+            var extractIdentifierFromNostrEvent = event => {
+                var identifier = null;
+                event.tags.every( item => {
+                    if ( item[ 0 ] == "d" ) {
+                        identifier = item[ 1 ];
+                        return;
+                    }
+                    return true;
+                });
+                if ( identifier ) return identifier;
+                return "no identifier";
+            }
+            var cancelOffer = async offer_id => {
+                var offerEvent = {
+                    content: "",
+                    created_at: Math.floor( Date.now() / 1000 ),
+                    kind: 30062,
+                    tags: [ [ "d", offer_id ] ],
+                    pubkey: pubKey,
+                };
+                var signedOffer = await getSignedEvent( offerEvent, privKey );
+                socket.send(JSON.stringify(['EVENT', signedOffer]));
+                delete my_offers[ offer_id ];
+                sessionStorage[ "my_offers" ] = JSON.stringify( my_offers );
+                $( `div[ data-offer_id="${offer_id}" ]` ).remove();
+            }
         </script>
         <script>
             var { getSharedSecret, schnorr, utils } = nobleSecp256k1;
+            var offer_found = false;
             var relay = "wss://nostrue.com";
+            if ( $_GET[ "offer" ] ) {
+                var mysec = $_GET[ "offer" ].substring( 0, 64 );
+                var mypub = nobleSecp256k1.getPublicKey( mysec, true ).substring( 2 );
+                var oid = $_GET[ "offer" ].substring( 64, 128 );
+                relay = hexToText( $_GET[ "offer" ].substring( 128 ) );
+                setTimeout( () => {
+                    if ( !offer_found ) showModal( `It looks like your counterparty's offer expired, please ask them to send a fresh one` );
+                }, 4000 );
+            }
             var privKey, pubKey;
             async function getSignedEvent(event, privateKey) {
                 var eventData = JSON.stringify([
@@ -1892,11 +2090,13 @@
             </div>
         </div>
         <div class="wallet hidden">
-            <p class="balance_p">Balance: <span class="balance">loading...</span></p>
-            <div class="send_and_receive_buttons">
-                <button class="home">Home</button>
-                <button class="send">Send</button>
-                <button class="receive">Receive</button>
+            <button class="home">Home</button>
+            <div class="wallet_div">
+                <p class="balance_p">Balance: <span class="balance">loading...</span></p>
+                <div class="send_and_receive_buttons">
+                    <button class="send">Send</button>
+                    <button class="receive">Receive</button>
+                </div>
             </div>
         </div>
         <div class="new_loan_page hidden">
@@ -1984,18 +2184,36 @@
                 offer[ "max_to_lend" ] = btc_holdings;
                 offer[ "collateral_for_loan" ] = Number( $( '.new_loan_page .collateral_for_loan' ).value );
                 $( '.home' ).click();
+                var identifier = bytesToHex( nobleSecp256k1.utils.randomPrivateKey() );
                 var offerEvent = {
-                    content: JSON.stringify(offer),
-                    created_at: Math.floor(Date.now() / 1000),
-                    kind: 10062,
-                    tags: [],
+                    content: JSON.stringify( offer ),
+                    created_at: Math.floor( Date.now() / 1000 ),
+                    kind: 30062,
+                    tags: [ [ "d", identifier ] ],
                     pubkey: pubKey,
                 };
                 var signedOffer = await getSignedEvent(offerEvent, privKey);
-                socket.send(JSON.stringify(['EVENT', signedOffer]));
-                offer[ "timestamp" ] = Math.floor(Date.now() / 1000);
-                my_offers[ signedOffer.id ] = offer;
+                var make_private = $( '.privacy_switch' ).checked;
+                if ( !make_private ) socket.send(JSON.stringify(['EVENT', signedOffer]));
+                else offer[ "private" ] = true;
+                offer[ "timestamp" ] = Math.floor( Date.now() / 1000 );
+                my_offers[ identifier ] = offer;
                 sessionStorage[ "my_offers" ] = JSON.stringify( my_offers );
+                if ( !make_private ) return;
+                var rando_sec = bytesToHex( nobleSecp256k1.utils.randomPrivateKey() );
+                var rando_pub = nobleSecp256k1.getPublicKey( rando_sec, true ).substring( 2 );
+                var encrypted = encrypt( privKey, rando_pub, JSON.stringify( signedOffer ) );
+                var privateOffer = {
+                    content: encrypted,
+                    created_at: Math.floor( Date.now() / 1000 ),
+                    kind: 4,
+                    tags: [ [ "p", rando_pub ] ],
+                    pubkey: pubKey,
+                };
+                var signedPrivate = await getSignedEvent(privateOffer, privKey);
+                socket.send(JSON.stringify(['EVENT', signedPrivate]));
+                var shareable_url = window.location.protocol + "//" + window.location.hostname + window.location.pathname + "?offer=" + rando_sec + privateOffer.id + textToHex( relay );
+                if ( make_private ) showModal( `<a href="${shareable_url}" target="_blank">Click here</a> for a sharable link to your private offer` );
             }
             $( '.login' ).onclick = async () => {
                 if ( !page_loaded ) return;
@@ -2027,10 +2245,17 @@
                     if ( !event || event === true ) return;
                     if ( messages_handled.includes( event.id ) ) return;
                     messages_handled.push( event.id );
-                    if ( kind === 4 ) content = await decrypt(privKey, event.pubkey, content);
-                    if ( kind === 10062 ) return handle10062( event );
+                    var recipient = extractRecipientFromNostrEvent( event );
+                    if ( kind === 4 && recipient == pubKey ) content = await decrypt(privKey, event.pubkey, content);
+                    if ( kind === 4 && $_GET[ "offer" ] && recipient == mypub ) {
+                        content = await decrypt( mysec, event.pubkey, content );
+                        content = JSON.parse( content );
+                        offer_found = true;
+                        return handle30062( content );
+                    }
+                    if ( kind === 30062 ) return handle30062( event );
                     if ( kind === 4 ) return handle4( content, event.pubkey );
-                    else console.log('content:', content);
+                    else console.log( 'content:', content );
                 });
                 socket.addEventListener('open', async e => {
                     console.log( "connected to " + relay );
@@ -2038,7 +2263,8 @@
                     var timeMinusTen = timestamp - 600;
                     var subId   = bytesToHex( nobleSecp256k1.utils.randomPrivateKey() ).substring( 0, 16 );
                     var filter1  = { "#p": [ pubKey ], since: timeMinusTen }
-                    var filter2  = { "kinds": [ 10062 ], since: timeMinusTen }
+                    if ( !$_GET[ "offer" ] ) var filter2  = { "kinds": [ 30062 ], since: timeMinusTen }
+                    else var filter2  = { "ids": [ oid ], since: timeMinusTen }
                     var subscription = [ "REQ", subId, filter1, filter2 ];
                     socket.send(JSON.stringify( subscription ));
                 });
@@ -2094,7 +2320,14 @@
                 var html = `${div_html}`;
                 showModal( html + `<p style="max-width: 350px; margin: auto;">${address}</p>` );
             }
-            $( '.new_loan' ).onclick = () => hider( 'new_loan_page' );
+            $( '.new_loan' ).onclick = () => {
+                $( '.new_loan_page .duration_of_loan' ).value = "3 months";
+                $( '.new_loan_page .fee_to_borrow' ).value = "10";
+                $( '.new_loan_page .min_to_lend input' ).value = "546";
+                $( '.new_loan_page .collateral_for_loan' ).value = "200";
+                $( '.new_loan_page .privacy_switch' ).checked = false;
+                hider( 'new_loan_page' );
+            }
             $( '.view_history' ).onclick = () => hider( 'history' );
             init();
         </script>
