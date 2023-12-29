@@ -2336,7 +2336,7 @@
             }
             $( '.logout' ).onclick = () => {
                 var conf = true;
-                if ( !!Object.keys( backups.user_history.loan_history ).length || !!Object.keys( backups.user_history.borrow_history ).length ) conf = confirm( `Logging out will permanently clear your transaction history so make sure you've backed it up first. Click ok to log out or cancel to not do that yet` );
+                if ( !!Object.keys( backups.user_history.loan_history ).length || !!Object.keys( backups.user_history.borrow_history ).length ) conf = confirm( `Logging out will permanently clear your transaction history so make sure you've backed it up first. Click ok to log out or cancel to not log out yet` );
                 if ( !conf ) return;
                 $( '.import_data' ).classList.remove( "hidden" );
                 $( '.logout' ).classList.add( "hidden" );
@@ -2357,6 +2357,8 @@
                 }
                 utxos_loaded = false;
                 $( '.balance' ).innerText = `loading...`;
+                $( '.view_history' ).classList.add( "hidden" );
+                $( '.backup_data' ).classList.add( "hidden" );
             }
             $( '.new_account' ).onclick = async () => {
                 var backup_words = backups[ "backup_words" ];
