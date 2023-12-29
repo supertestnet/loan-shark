@@ -11,7 +11,6 @@
         <script src="https://bundle.run/bech32@2.0.0"></script>
         <script src="https://bundle.run/bip39@3.0.4"></script>
         <script src="https://bundle.run/bip32@2.0.6"></script>
-        <script src="https://bundle.run/bip65@1.0.3"></script>
         <style>
             * {
                 box-sizing: border-box;
@@ -123,24 +122,23 @@
         <script>
             //temp account wallet 1: job oak ten clever void nuclear screen tooth lumber orbit salad tackle
             //temp account wallet 2: memory owner below select subject common pass sting honey mandate prefer meat
-            var utxos = [];
+            var backups = {
+                backup_words: "",
+                utxos: [],
+                my_offers: {},
+                ready_to_finish: {},
+                ready_to_finish_lender: {},
+                user_history: {
+                    loan_history: {},
+                    borrow_history: {},
+                }
+            }
             var utxos_loaded = false;
             var socket = {}
-            var my_offers = {}
-            if ( sessionStorage[ "my_offers" ] ) my_offers = JSON.parse( sessionStorage[ "my_offers" ] );
             var messages_handled = [];
             var my_accepts = {}
-            var ready_to_finish = {}
             var fresh_change_address, fresh_receive_address;
             var getting_change, getting_receive, getting_utxos;
-            if ( sessionStorage[ "ready_to_finish" ] ) ready_to_finish = JSON.parse( sessionStorage[ "ready_to_finish" ] );
-            var ready_to_finish_lender = {}
-            if ( sessionStorage[ "ready_to_finish_lender" ] ) ready_to_finish_lender = JSON.parse( sessionStorage[ "ready_to_finish_lender" ] );
-            var user_history = {
-                loan_history: {},
-                borrow_history: {}
-            }
-            if ( sessionStorage[ "user_history" ] ) user_history = JSON.parse( sessionStorage[ "user_history" ] );
             var good_socket = false;
             var fee_modified = false;
             var page_loaded = false;
@@ -307,51 +305,51 @@
 
             async function getBalanceFromUtxos( utxos ) {
                 var balance = 0;
-                utxos.forEach( item => balance = balance + Number( item[ "amount" ] ));
+                backups.utxos.forEach( item => balance = balance + Number( item[ "amount" ] ));
                 return Number( balance );
             }
             var showBalance = async () => {
-                var balance = await getBalanceFromUtxos( utxos );
+                var balance = await getBalanceFromUtxos( backups.utxos );
                 if ( balance ) utxos_loaded = true;
                 if ( utxos_loaded ) $( '.balance' ).innerText = `${balance} sats`;
             }
             var findUtxos = async () => {
                 if ( getting_utxos ) return;
                 getting_utxos = true;
-                var backup_words = sessionStorage[ "backup_words" ];
-                if ( "utxos" in sessionStorage ) utxos = JSON.parse( sessionStorage[ "utxos" ] );
-                utxos = await checkAddresses( backup_words, "testnet/" );
+                var backup_words = backups[ "backup_words" ];
+                backups[ "utxos" ] = await checkAddresses( backup_words, "testnet/" );
+                localStorage[ "backups" ] = JSON.stringify( backups );
                 utxos_loaded = true;
-                sessionStorage[ "utxos" ] = JSON.stringify( utxos );
                 getting_utxos = false;
             }
             var makeReceive = async () => {
                 if ( getting_receive ) return;
                 getting_receive = true;
-                var backup_words = sessionStorage[ "backup_words" ];
+                var backup_words = backups[ "backup_words" ];
                 fresh_receive_address = await getFirstUnusedReceiveAddress( backup_words, "testnet/" );
                 getting_receive = false;
             }
             var makeChange = async () => {
                 if ( getting_change ) return;
                 getting_change = true;
-                var backup_words = sessionStorage[ "backup_words" ];
+                var backup_words = backups[ "backup_words" ];
                 fresh_change_address = await getFirstUnusedChangeAddress( backup_words, "testnet/" );
                 getting_change = false;
             }
-            var init = async () => {
+            var init = async test => {
                 if ( !page_loaded ) {
-                    await waitSomeSeconds( 0.5 );
-                    return init();
+                    await waitABit();
+                    return init( "test" );
                 }
                 if ( !$( '.offer' ) ) $( '.nothing_in_orderbook' ).classList.remove( "hidden" );
                 purgeOldContracts();
                 displayActiveContracts();
                 displayActiveContractsLender();
                 var backup_words;
-                if ( sessionStorage[ "backup_words" ] ) backup_words = sessionStorage[ "backup_words" ];
+                if ( !backups[ "backup_words" ] && localStorage[ "backups" ] ) backups = JSON.parse( localStorage[ "backups" ] );
+                else backup_words = backups[ "backup_words" ];
                 if ( !backup_words ) {
-                    await waitSomeSeconds( 3 );
+                    await waitABit();
                     return init();
                 } else {
                     $( '.login' ).click();
@@ -373,6 +371,10 @@
                 return new Promise( resolve => setTimeout( resolve, num ) );
             }
 
+            var waitABit = () => {
+                return new Promise( resolve => setTimeout( resolve, 500 ) );
+            }
+
             var hider = reveal => {
                 $( '.homepage' ).classList.add( "hidden" );
                 $( '.wallet' ).classList.add( "hidden" );
@@ -387,7 +389,7 @@
                 var inputs = [];
                 var outputs = [];
                 var from_amount = 0;
-                utxos.forEach( utxo => {
+                backups.utxos.forEach( utxo => {
                     var [ tpubkey ] = tapscript.Tap.getPubKey( utxo[ "pubkey" ].substring( 2 ) );
                     from_amount = from_amount + utxo[ "amount" ];
                     var txid = utxo[ "tx_id" ];
@@ -423,7 +425,7 @@
                 var mining_fee = txsize * sats_per_byte;
                 if ( mining_fee < 172 ) mining_fee = 172;
                 if ( from_amount - to_amount < mining_fee ) return showModal( `With your chosen fee rate you must leave at least ${mining_fee} sats to pay for mining fees, which means the max you can spend is ${from_amount - mining_fee} sats. Please try again` );
-                var backup_words = sessionStorage[ "backup_words" ];
+                var backup_words = backups[ "backup_words" ];
                 var change_address = await alt_getFirstUnusedChangeAddress( backup_words, network );
                 if ( from_amount - ( to_amount + mining_fee ) >= 546 ) {
                     outputs.push({
@@ -435,7 +437,7 @@
                     vin  : inputs,
                     vout : outputs,
                 });
-                utxos.forEach( ( utxo, index ) => {
+                backups.utxos.forEach( ( utxo, index ) => {
                     var [ tseckey ] = tapscript.Tap.getSecKey( utxo[ "privkey" ] );
                     var sig = tapscript.Signer.taproot.sign( tseckey, txdata, index );
                     txdata.vin[ index ].witness = [ sig ];
@@ -608,10 +610,10 @@
                     var principle = Number( div.getElementsByClassName( "enter_amount" )[ 0 ].value );
                     var collateral = principle * Number( ( content.collateral_for_loan / 100 ).toFixed( 2 ) );
                     var btc_holdings = 0;
-                    utxos.forEach(  utxo => btc_holdings = btc_holdings + utxo[ "amount" ] );
+                    backups.utxos.forEach(  utxo => btc_holdings = btc_holdings + utxo[ "amount" ] );
                     if ( btc_holdings < collateral ) return showModal( `This loan for ${principle} sats requires you to post ${collateral} sats as collateral. You only have ${btc_holdings} sats. Please use the Wallet button to add ${collateral - btc_holdings} sats if you wish to continue` );
                     var utxos_for_this_transaction = [];
-                    utxos.forEach( utxo => {
+                    backups.utxos.forEach( utxo => {
                         utxos_for_this_transaction.push({
                             "value": utxo[ "amount" ],
                             "txid": utxo[ "tx_id" ],
@@ -620,7 +622,7 @@
                         });
                     });
                     var current_blockheight = await getBlockheight( "" );
-                    var backup_words = sessionStorage[ "backup_words" ];
+                    var backup_words = backups[ "backup_words" ];
                     showProgress( 1, 7, `getting a fresh address` );
                     console.log( `step 1 of 6, getting a fresh address` );
                     var recovery_address = await alt_getFirstUnusedChangeAddress( backup_words, "testnet/" );
@@ -724,17 +726,17 @@
                 if ( !( "utxos" in json ) ) return;
                 if ( json[ "offer" ].length != 64 || !isValidHex( json[ "offer" ] ) ) return;
                 var the_offer = json[ "offer" ];
-                if ( !( json[ "offer" ] in my_offers ) ) return;
+                if ( !( json[ "offer" ] in backups.my_offers ) ) return;
                 if ( typeof json[ "principle" ] != "number" ) return;
-                if ( json[ "principle" ] > my_offers[ json[ "offer" ] ][ "max_to_lend" ] ) return;
-                if ( json[ "principle" ] < my_offers[ json[ "offer" ] ][ "min_to_lend" ] ) return;
+                if ( json[ "principle" ] > backups.my_offers[ json[ "offer" ] ][ "max_to_lend" ] ) return;
+                if ( json[ "principle" ] < backups.my_offers[ json[ "offer" ] ][ "min_to_lend" ] ) return;
                 if ( !isValidAddress( json[ "recovery" ] ) ) return;
                 if ( !isValidAddress( json[ "principle_address" ] ) ) return;
                 if ( typeof json[ "timelock" ] != "number" ) return;
                 var current_blockheight = await getBlockheight( "" );
                 if ( json.length ) return;
                 if ( json[ "offer" ] != the_offer ) return;
-                var expected_timelock = my_offers[ json[ "offer" ] ][ "duration_of_loan" ] * 30 * 144 + current_blockheight;
+                var expected_timelock = backups.my_offers[ json[ "offer" ] ][ "duration_of_loan" ] * 30 * 144 + current_blockheight;
                 if ( $_GET[ "test_short_loans" ] ) expected_timelock = current_blockheight + Number( $_GET[ "test_short_loans" ] );
                 if ( Math.abs( expected_timelock - json[ "timelock" ] ) > 2 ) return console.log( `couldn't agree on timelock. I had: ${expected_timelock}. They had: ${json[ "timelock" ]}. Difference was greater than 2 so no deal.` );
                 if ( typeof json[ "utxos" ] != "object" ) return;
@@ -756,7 +758,7 @@
                         },
                     });
                 }
-                var collateral_requirement = json[ "principle" ] * Number( ( my_offers[ json[ "offer" ] ][ "collateral_for_loan" ] / 100 ).toFixed( 2 ) );
+                var collateral_requirement = json[ "principle" ] * Number( ( backups.my_offers[ json[ "offer" ] ][ "collateral_for_loan" ] / 100 ).toFixed( 2 ) );
                 if ( sum_of_values < collateral_requirement ) return;
                 var borrower_change = sum_of_values - collateral_requirement;
                 if ( !isValidAddress( json[ "contract" ] ) ) return;
@@ -778,7 +780,7 @@
                 var contract_address = tapscript.Address.p2tr.fromPubKey( tpubkey, 'testnet' );
                 if ( contract_address != json[ "contract" ] ) return;
                 var utxos_for_this_transaction = [];
-                utxos.forEach( utxo => {
+                backups.utxos.forEach( utxo => {
                     utxos_for_this_transaction.push({
                         "value": utxo[ "amount" ],
                         "txid": utxo[ "tx_id" ],
@@ -833,7 +835,7 @@
                 });
                 //this optional third vout (vout 2) gives some change, if necessary, to the lender
                 if ( lender_change ) {
-                    var backup_words = sessionStorage[ "backup_words" ];
+                    var backup_words = backups[ "backup_words" ];
                     var lender_change_address = await alt_getFirstUnusedChangeAddress( backup_words, "testnet/" );
                     outputs.push({
                         value: lender_change,
@@ -844,11 +846,11 @@
                     vin: inputs,
                     vout: outputs,
                 });
-                var index_of_my_inputs = txdata[ "vin" ].length - utxos.length;
+                var index_of_my_inputs = txdata[ "vin" ].length - backups.utxos.length;
                 var my_sigs = [];
                 var num = 0;
                 var i; for ( i=index_of_my_inputs; i<txdata[ "vin" ].length; i++ ) {
-                    var [ tseckey ] = tapscript.Tap.getSecKey( utxos[ num ][ "privkey" ] );
+                    var [ tseckey ] = tapscript.Tap.getSecKey( backups.utxos[ num ][ "privkey" ] );
                     my_sigs.push( tapscript.Signer.taproot.sign( tseckey, txdata, i ).hex );
                     var sighash = await tapscript.Signer.taproot.hash( txdata, i );
                     txdata.vin[ i ].witness = [ my_sigs[ num ] ];
@@ -856,8 +858,8 @@
                 }
                 var txhex = tapscript.Tx.encode( txdata ).hex;
                 var txid = tapscript.Tx.util.getTxid( txhex );
-                if ( !( json[ "offer" ] in my_offers ) ) return console.log( `this offer: ${json[ "offer" ]} was not in my offers: ${my_offers}` );
-                var repayment_value = Math.round( json[ "principle" ] * Number( `1.${my_offers[ json[ "offer" ] ][ "fee_to_borrow" ]}` ) );
+                if ( !( json[ "offer" ] in backups.my_offers ) ) return console.log( `this offer: ${json[ "offer" ]} was not in my offers: ${backups.my_offers}` );
+                var repayment_value = Math.round( json[ "principle" ] * Number( `1.${backups.my_offers[ json[ "offer" ] ][ "fee_to_borrow" ]}` ) );
                 //each input contributes a 64 byte signature, a 32 byte txid, a 4 byte vout, and 4 extra bytes for padding
                 var txsize = 64 + 32 + 8;
                 //each output contributes a 33 byte scriptpubkey and a 4 byte value
@@ -905,10 +907,9 @@
                     }],
                     locktime: Number( timelock ),
                 });
-                ready_to_finish_lender[ json[ "offer" ] ] = [ timelock, seizure_txdata[ "vin" ], seizure_target, seizure_script, seizure_cblock, contract_address, json, my_offers[ json[ "offer" ] ], borrower, json[ "offer" ] ];
-                sessionStorage[ "ready_to_finish_lender" ] = JSON.stringify( ready_to_finish_lender );
-                user_history[ "loan_history" ][ json[ "offer" ] ] = [ contract_address, json, my_offers[ json[ "offer" ] ] ];
-                sessionStorage[ "user_history" ] = JSON.stringify( user_history );
+                backups.ready_to_finish_lender[ json[ "offer" ] ] = [ timelock, seizure_txdata[ "vin" ], seizure_target, seizure_script, seizure_cblock, contract_address, json, backups.my_offers[ json[ "offer" ] ], borrower, json[ "offer" ] ];
+                backups.user_history[ "loan_history" ][ json[ "offer" ] ] = [ contract_address, json, backups.my_offers[ json[ "offer" ] ] ];
+                localStorage[ "backups" ] = JSON.stringify( backups );
                 displayHistory();
                 var message_for_borrower = {
                     msg_type: "finalize",
@@ -1040,8 +1041,8 @@
                     vout: outputs,
                 });
                 var my_sigs = [];
-                var i; for ( i=0; i<utxos.length; i++ ) {
-                    var [ tseckey ] = tapscript.Tap.getSecKey( utxos[ i ][ "privkey" ] );
+                var i; for ( i=0; i<backups.utxos.length; i++ ) {
+                    var [ tseckey ] = tapscript.Tap.getSecKey( backups.utxos[ i ][ "privkey" ] );
                     my_sigs.push( tapscript.Signer.taproot.sign( tseckey, txdata, i ).hex );
                     txdata.vin[ i ].witness = [ my_sigs[ i ] ];
                 }
@@ -1050,23 +1051,23 @@
                 var i; for ( i=index_of_lender_inputs; i<txdata[ "vin" ].length; i++ ) {
                     var isValid = false;
                     var sighash = await tapscript.Signer.taproot.hash( txdata, i );
-                    var sig = swap_sigs[ i - utxos.length ];
-                    var words = bech32.bech32m.decode( json[ "utxos" ][ i - utxos.length ][ "address" ] ).words;
+                    var sig = swap_sigs[ i - backups.utxos.length ];
+                    var words = bech32.bech32m.decode( json[ "utxos" ][ i - backups.utxos.length ][ "address" ] ).words;
                     var segwit_version = words[ 0 ];
                     words.splice( 0, 1 );
                     var pubkey = bytesToHex( bech32.bech32m.fromWords( words ) );
                     isValid = await nobleSecp256k1.schnorr.verify( sig, sighash.hex, pubkey );
                     if ( !isValid ) return showModal( `Oh no, one of your counterparty's signtures for the swap transaction was invalid! Aborting` );
-                    txdata.vin[ i ].witness = [ swap_sigs[ i - utxos.length ] ];
+                    txdata.vin[ i ].witness = [ swap_sigs[ i - backups.utxos.length ] ];
                     try {
-                        var sig = swap_sigs[ i - utxos.length ];
-                        var words = bech32.bech32m.decode( json[ "utxos" ][ i - utxos.length ][ "address" ] ).words;
+                        var sig = swap_sigs[ i - backups.utxos.length ];
+                        var words = bech32.bech32m.decode( json[ "utxos" ][ i - backups.utxos.length ][ "address" ] ).words;
                         var segwit_version = words[ 0 ];
                         words.splice( 0, 1 );
                         var pubkey = bytesToHex( bech32.bech32m.fromWords( words ) );
                         isValid = await nobleSecp256k1.schnorr.verify( sig, sighash.hex, pubkey );
                         if ( !isValid ) return showModal( `Oh no, one of your counterparty's signtures for the swap transaction was invalid! Aborting` );
-                        txdata.vin[ i ].witness = [ swap_sigs[ i - utxos.length ] ];
+                        txdata.vin[ i ].witness = [ swap_sigs[ i - backups.utxos.length ] ];
                     } catch( e ) {
                         return showModal( `Oh no, one of your counterparty's signatures for the swap transaction was invalid! Aborting (btw, this is the warning when there was an error in the try/catch block)` );
                     }
@@ -1122,11 +1123,10 @@
                 var isValid = await nobleSecp256k1.schnorr.verify( lenders_sig.substring( 0, 128 ), sighash.hex, lender );
                 if ( !isValid ) return showModal( `Oh no, your counterparty's signture for the repayment tx was invalid! Aborting` );
                 var inputs_and_outputs = [ repayment_txdata[ "vin" ], repayment_txdata[ "vout" ] ];
-                if ( !( String( timelock ) in ready_to_finish ) ) ready_to_finish[ String( timelock ) ] = [];
-                ready_to_finish[ String( timelock ) ].push( inputs_and_outputs, my_accepts[ json[ "offer" ] ], lender, lenders_sig );
-                sessionStorage[ "ready_to_finish" ] = JSON.stringify( ready_to_finish );
-                user_history[ "borrow_history" ][ json[ "offer" ] ] = my_accepts[ json[ "offer" ] ];
-                sessionStorage[ "user_history" ] = JSON.stringify( user_history );
+                if ( !( String( timelock ) in backups.ready_to_finish ) ) backups.ready_to_finish[ String( timelock ) ] = [];
+                backups.ready_to_finish[ String( timelock ) ].push( inputs_and_outputs, my_accepts[ json[ "offer" ] ], lender, lenders_sig );
+                backups.user_history[ "borrow_history" ][ json[ "offer" ] ] = my_accepts[ json[ "offer" ] ];
+                localStorage[ "backups" ] = JSON.stringify( backups );
                 displayHistory();
             }
 
@@ -1185,17 +1185,17 @@
             var purgeOldContracts = async () => {
                 var now = Math.floor( Date.now() / 1000 );
                 var now_minus_ten = now - 600;
-                var i; for ( i=0; i<Object.keys( my_offers ).length; i++ ) {
-                    var key = Object.keys( my_offers )[ i ];
-                    var item = my_offers[ key ];
+                var i; for ( i=0; i<Object.keys( backups.my_offers ).length; i++ ) {
+                    var key = Object.keys( backups.my_offers )[ i ];
+                    var item = backups.my_offers[ key ];
                     if ( !( "timestamp" in item ) || item[ "timestamp" ] < now_minus_ten ) {
-                        var offer = JSON.parse( JSON.stringify( my_offers[ key ] ) );
-                        delete my_offers[ key ];
-                        sessionStorage[ "my_offers" ] = JSON.stringify( my_offers );
+                        var offer = JSON.parse( JSON.stringify( backups.my_offers[ key ] ) );
+                        delete backups.my_offers[ key ];
+                        localStorage[ "backups" ] = JSON.stringify( backups );
                         if ( "private" in offer ) continue;
                         delete offer[ "timestamp" ];
                         var btc_holdings = 0;
-                        utxos.forEach(  utxo => btc_holdings = btc_holdings + utxo[ "amount" ] );
+                        backups.utxos.forEach(  utxo => btc_holdings = btc_holdings + utxo[ "amount" ] );
                         offer[ "max_to_lend" ] = btc_holdings;
                         var offerEvent = {
                             content: JSON.stringify( offer ),
@@ -1207,45 +1207,48 @@
                         var signedOffer = await getSignedEvent( offerEvent, privKey );
                         socket.send(JSON.stringify(['EVENT', signedOffer]));
                         offer[ "timestamp" ] = Math.floor( Date.now() / 1000 );
-                        my_offers[ key ] = offer;
-                        sessionStorage[ "my_offers" ] = JSON.stringify( my_offers );
+                        backups.my_offers[ key ] = offer;
+                        localStorage[ "backups" ] = JSON.stringify( backups );
                     }
                 }
                 $$( '.offer' ).forEach( item => {
                     if ( Number( item.getAttribute( "data-timestamp" ) ) < now_minus_ten ) item.parentElement.remove();
                 });
-                Object.keys( ready_to_finish ).forEach( async ( item, index ) => {
-                    var contract = ready_to_finish[ item ][ 1 ][ "msg" ][ "contract" ];
+                Object.keys( backups.ready_to_finish ).forEach( async ( item, index ) => {
+                    var contract = backups.ready_to_finish[ item ][ 1 ][ "msg" ][ "contract" ];
                     //check if address sent money
                     var contract_is_fulfilled = await addressOnceSentMoney( contract, "" );
                     if ( contract_is_fulfilled ) {
-                        delete ready_to_finish[ item ];
-                        sessionStorage[ "ready_to_finish" ] = JSON.stringify( ready_to_finish );
+                        delete backups.ready_to_finish[ item ];
+                        localStorage[ "backups" ] = JSON.stringify( backups );
                     }
                 });
                 var current_blockheight = await getBlockheight( "" );
-                Object.keys( ready_to_finish_lender ).forEach( async ( item, index ) => {
+                Object.keys( backups.ready_to_finish_lender ).forEach( async ( item, index ) => {
                     if ( item == undefined || item == "undefined" ) {
-                        delete ready_to_finish_lender[ item ];
+                        delete backups.ready_to_finish_lender[ item ];
+                        localStorage[ "backups" ] = JSON.stringify( backups );
                         return;
                     }
-                    if ( !ready_to_finish_lender[ item ][ 5 ] ) {
-                        delete ready_to_finish_lender[ item ];
+                    if ( !backups.ready_to_finish_lender[ item ][ 5 ] ) {
+                        delete backups.ready_to_finish_lender[ item ];
+                        localStorage[ "backups" ] = JSON.stringify( backups );
                         return;
                     }
-                    var contract = ready_to_finish_lender[ item ][ 5 ];
+                    var contract = backups.ready_to_finish_lender[ item ][ 5 ];
                     var contract_started = await addressOnceHadMoney( contract, "" );
-                    if ( current_blockheight > ready_to_finish_lender[ item ][ 0 ] && !contract_started ) {
-                        if ( !( item in ready_to_finish_lender ) ) return;
-                        delete ready_to_finish_lender[ item ];
-                        sessionStorage[ "ready_to_finish_lender" ] = JSON.stringify( ready_to_finish_lender );
+                    if ( !( item in backups.ready_to_finish_lender ) ) return;
+                    if ( current_blockheight > backups.ready_to_finish_lender[ item ][ 0 ] && !contract_started ) {
+                        if ( !( item in backups.ready_to_finish_lender ) ) return;
+                        delete backups.ready_to_finish_lender[ item ];
+                        localStorage[ "backups" ] = JSON.stringify( backups );
                         return;
                     }
                     //check if address sent money
                     var contract_is_fulfilled = await addressOnceSentMoney( contract, "" );
                     if ( contract_is_fulfilled ) {
-                        delete ready_to_finish_lender[ item ];
-                        sessionStorage[ "ready_to_finish_lender" ] = JSON.stringify( ready_to_finish_lender );
+                        delete backups.ready_to_finish_lender[ item ];
+                        localStorage[ "backups" ] = JSON.stringify( backups );
                     }
                 });
             }
@@ -1262,7 +1265,7 @@
             var displayActiveContracts = async () => {
                 if ( displaying_active_contracts_borrower ) return;
                 displaying_active_contracts_borrower = true;
-                if ( Object.keys( ready_to_finish ).length ) {
+                if ( Object.keys( backups.ready_to_finish ).length ) {
                     $( '.active_contracts_div' ).classList.remove( "hidden" );
                     if ( $( '.modal' ) && !$( '.modal' ).classList.contains( "hidden" ) && $( '.modal' ).innerHTML.includes( "progressOutline" ) ) {
                         showProgress( 7, 7, `done` );
@@ -1275,28 +1278,42 @@
                 }
                 var current_blockheight = await getBlockheight( "" );
                 var div_0 = document.createElement( "div" );
-                var i; for ( i=0; i<Object.keys( ready_to_finish ).length; i++ ) {
-                    var item = Object.keys( ready_to_finish )[ i ];
-                    var contract = ready_to_finish[ item ][ 1 ][ "msg" ][ "contract" ];
+                var i; for ( i=0; i<Object.keys( backups.ready_to_finish ).length; i++ ) {
+                    var item = Object.keys( backups.ready_to_finish )[ i ];
+                    var contract = backups.ready_to_finish[ item ][ 1 ][ "msg" ][ "contract" ];
                     var address_once_sent_money = await addressOnceSentMoney( contract, "" );
                     if ( address_once_sent_money ) continue;
                     var address_once_had_money = await addressOnceHadMoney( contract, "" );
                     if ( !address_once_had_money ) continue;
-                    var principle = ready_to_finish[ item ][ 1 ][ "msg" ][ "principle" ];
-                    var timelock = ready_to_finish[ item ][ 1 ][ "msg" ][ "timelock" ];
-                    var fee_to_borrow = ready_to_finish[ item ][ 1 ][ "original_offer" ][ "fee_to_borrow" ];
-                    var duration_of_loan = ready_to_finish[ item ][ 1 ][ "original_offer" ][ "duration_of_loan" ];
+                    var principle = backups.ready_to_finish[ item ][ 1 ][ "msg" ][ "principle" ];
+                    var timelock = backups.ready_to_finish[ item ][ 1 ][ "msg" ][ "timelock" ];
+                    var fee_to_borrow = backups.ready_to_finish[ item ][ 1 ][ "original_offer" ][ "fee_to_borrow" ];
+                    var duration_of_loan = backups.ready_to_finish[ item ][ 1 ][ "original_offer" ][ "duration_of_loan" ];
                     var repayment_value = Math.round( principle * Number( `1.${fee_to_borrow}` ) );
                     var due_timestamp = estimateTimestampBasedOnBlockheight( timelock, current_blockheight );
                     var due_date = new Date( due_timestamp * 1000 ).toLocaleDateString();
-                    var my_balance = await getBalanceFromUtxos( utxos );
+                    var txinfo = await addressReceivedMoneyInThisTx( contract, "" );
+                    if ( !txinfo[ 0 ] ) continue;
+                    var received_info = await getData( `https://mutinynet.com/api/tx/${txinfo[ 0 ]}` );
+                    var received_status = JSON.parse( received_info )[ "status" ];
+                    if ( received_status && "block_height" in received_status ) {
+                        var received_block = received_status[ "block_height" ];
+                        // var received_hr_timestamp = estimateTimestampBasedOnBlockheight( received_block, current_blockheight );
+                        var received_hr_timestamp = received_status[ "block_time" ];
+                        var received_date = new Date( received_hr_timestamp * 1000 ).toLocaleDateString();
+                    } else {
+                        var received_block = current_blockheight;
+                        var received_date = new Date().toLocaleDateString();
+                    }
+                    var my_balance = await getBalanceFromUtxos( backups.utxos );
                     var time_left = timelock - current_blockheight;
                     var time_left_hr_version = convertHMS( time_left * 10 * 60 );
                     var enough_or_not = "";
                     var pay_it_off = `-- <span class="top_up" style="color: blue; text-decoration: underline; cursor: pointer;" onclick="$( '.receive' ).click()">top up</span>`;
-                    var utxos_for_this_transaction = ready_to_finish[ item ][ 1 ][ "msg" ][ "utxos" ];
+                    if ( !( item in backups.ready_to_finish ) ) continue;
+                    var utxos_for_this_transaction = backups.ready_to_finish[ item ][ 1 ][ "msg" ][ "utxos" ];
                     if ( repayment_value > my_balance ) enough_or_not = "not ";
-                    else pay_it_off = `-- <span class="pay_it_off" data-ins_and_outs="${textToHex( JSON.stringify( ready_to_finish[ item ][ 0 ] ) )}" data-lender="${ready_to_finish[ item ][ 2 ]}" data-lenders_sig="${ready_to_finish[ item ][ 3 ]}" data-custom_utxo="${utxos_for_this_transaction[ 0 ][ "txid" ] + utxos_for_this_transaction[ 0 ][ "vout" ]}" data-duration_of_loan="${duration_of_loan}" style="color: blue; text-decoration: underline; cursor: pointer;">Pay it off</span>`;
+                    else pay_it_off = `-- <span class="pay_it_off" data-ins_and_outs="${textToHex( JSON.stringify( backups.ready_to_finish[ item ][ 0 ] ) )}" data-lender="${backups.ready_to_finish[ item ][ 2 ]}" data-lenders_sig="${backups.ready_to_finish[ item ][ 3 ]}" data-custom_utxo="${utxos_for_this_transaction[ 0 ][ "txid" ] + utxos_for_this_transaction[ 0 ][ "vout" ]}" data-duration_of_loan="${duration_of_loan}" style="color: blue; text-decoration: underline; cursor: pointer;">Pay it off</span>`;
                     var time_left = Number( item ) - current_blockheight;
                     var block_or_blocks = "blocks";
                     if ( time_left == 1 ) block_or_blocks = "block";
@@ -1306,6 +1323,7 @@
                     html = html + `<p>Principle: ${principle} sats</p>`;
                     html = html + `<p>Fee you'll pay: ${fee_to_borrow}% (i.e. ${repayment_value - principle} sats)</p>`;
                     html = html + `<p>You have: ${my_balance} sats, which is ${enough_or_not}enough ${pay_it_off}</p>`;
+                    html = html + `<p>Contract was created in: block ${received_block} (~${received_date})</p>`;
                     html = html + `<p>Repay before this block: block ${item} (~${due_date})</p>`;
                     html = html + `<p>Current block: block ${current_blockheight}</p>`;
                     html = html + `<p>Time left: ${time_left} ${block_or_blocks} (~${time_left_hr_version})</p>`;
@@ -1326,8 +1344,8 @@
                         var duration_of_loan = e.target.getAttribute( "data-duration_of_loan" );
                         var inputs = ins_and_outs[ 0 ];
                         var outputs = ins_and_outs[ 1 ];
-                        var i; for ( i=0; i<utxos.length; i++ ) {
-                            var utxo = utxos[ i ];
+                        var i; for ( i=0; i<backups.utxos.length; i++ ) {
+                            var utxo = backups.utxos[ i ];
                             inputs.push({
                                 txid: utxo[ "tx_id" ],
                                 vout: utxo[ "output_number" ],
@@ -1339,7 +1357,7 @@
                         }
                         var sum_of_values = 0;
                         inputs.forEach( item => sum_of_values = sum_of_values + item[ "prevout" ][ "value" ] );
-                        var backup_words = sessionStorage[ "backup_words" ];
+                        var backup_words = backups[ "backup_words" ];
                         var change_address = await alt_getFirstUnusedChangeAddress( backup_words, "testnet/" );
                         var txsize = 0;
                         inputs.forEach( item => txsize = txsize + 64 + 32 + 8 );
@@ -1385,8 +1403,8 @@
                         var isValid = await nobleSecp256k1.schnorr.verify( sig, sighash.hex, pubKey );
                         if ( !isValid ) return showModal( `Oh no, your signture for the repayment tx was invalid! Ask a developer for help` );
                         var my_sigs = [];
-                        var i; for ( i=0; i<utxos.length; i++ ) {
-                            var [ tseckey ] = tapscript.Tap.getSecKey( utxos[ i ][ "privkey" ] );
+                        var i; for ( i=0; i<backups.utxos.length; i++ ) {
+                            var [ tseckey ] = tapscript.Tap.getSecKey( backups.utxos[ i ][ "privkey" ] );
                             my_sigs.push( tapscript.Signer.taproot.sign( tseckey, repayment_txdata, i + 1 ).hex );
                             repayment_txdata.vin[ i + 1 ].witness = [ my_sigs[ i ] ];
                         }
@@ -1416,11 +1434,11 @@
             var displayActiveContractsLender = async () => {
                 if ( displaying_active_contracts_lender ) return;
                 displaying_active_contracts_lender = true;
-                if ( Object.keys( ready_to_finish_lender ).length ) {
+                if ( Object.keys( backups.ready_to_finish_lender ).length ) {
                     var an_addy_had_money_and_didnt_send_it_yet = false;
-                    var i; for ( i=0; i<Object.keys( ready_to_finish_lender ).length; i++ ) {
-                        var item = Object.keys( ready_to_finish_lender )[ i ];
-                        var address = ready_to_finish_lender[ item ][ 5 ];
+                    var i; for ( i=0; i<Object.keys( backups.ready_to_finish_lender ).length; i++ ) {
+                        var item = Object.keys( backups.ready_to_finish_lender )[ i ];
+                        var address = backups.ready_to_finish_lender[ item ][ 5 ];
                         var address_once_sent_money = await addressOnceSentMoney( address, "" );
                         if ( address_once_sent_money ) continue;
                         var address_once_had_money = await addressOnceHadMoney( address, "" );
@@ -1437,18 +1455,18 @@
                 }
                 var current_blockheight = await getBlockheight( "" );
                 var div_0 = document.createElement( "div" );
-                var i; for ( i=0; i<Object.keys( ready_to_finish_lender ).length; i++ ) {
-                    var item = Object.keys( ready_to_finish_lender )[ i ];
-                    var contract = ready_to_finish_lender[ item ][ 5 ];
+                var i; for ( i=0; i<Object.keys( backups.ready_to_finish_lender ).length; i++ ) {
+                    var item = Object.keys( backups.ready_to_finish_lender )[ i ];
+                    var contract = backups.ready_to_finish_lender[ item ][ 5 ];
                     var address_once_sent_money = await addressOnceSentMoney( contract, "" );
                     if ( address_once_sent_money ) continue;
                     var address_once_had_money = await addressOnceHadMoney( contract, "" );
                     if ( !address_once_had_money ) continue;
-                    var accept_msg = ready_to_finish_lender[ item ][ 6 ];
-                    if ( !ready_to_finish_lender[ item ][ 7 ] ) continue;
-                    var original_offer = ready_to_finish_lender[ item ][ 7 ];
-                    var borrower = ready_to_finish_lender[ item ][ 8 ];
-                    var original_offer_id = ready_to_finish_lender[ item ][ 9 ];
+                    var accept_msg = backups.ready_to_finish_lender[ item ][ 6 ];
+                    if ( !backups.ready_to_finish_lender[ item ][ 7 ] ) continue;
+                    var original_offer = backups.ready_to_finish_lender[ item ][ 7 ];
+                    var borrower = backups.ready_to_finish_lender[ item ][ 8 ];
+                    var original_offer_id = backups.ready_to_finish_lender[ item ][ 9 ];
                     var principle = accept_msg[ "principle" ];
                     var timelock = accept_msg[ "timelock" ];
                     try {
@@ -1458,7 +1476,7 @@
                             console.log( `Someone tried to take one of your offers but you got rid of it -- this one: ${original_offer_id}` );
                             continue;
                         }
-                        if ( !Object.keys( my_offers ).length ) {
+                        if ( !Object.keys( backups.my_offers ).length ) {
                             console.log( `unknown error, please refresh your browser. If this error persists, ask a developer for help.` );
                             continue;
                         }
@@ -1467,7 +1485,7 @@
                     var collateral_for_loan = original_offer[ "collateral_for_loan" ];
                     var collateral_requirement = principle * Number( ( collateral_for_loan / 100 ).toFixed( 2 ) );
                     var repayment_value = Math.round( principle * Number( `1.${fee_to_borrow}` ) );
-                    var my_balance = await getBalanceFromUtxos( utxos );
+                    var my_balance = await getBalanceFromUtxos( backups.utxos );
                     var txinfo = await addressReceivedMoneyInThisTx( contract, "" );
                     //I ensured purgeOldContracts removes contracts where the borrower never deposited
                     //but only after the timelock expires -- otherwise they could deposit money there after
@@ -1487,7 +1505,7 @@
                     var blocks_since_confirmed = await howManyConfs( txinfo[ 0 ], "" );
                     var due_timestamp = estimateTimestampBasedOnBlockheight( timelock, current_blockheight );
                     var due_date = new Date( due_timestamp * 1000 ).toLocaleDateString();
-                    if ( !( item in ready_to_finish_lender ) ) continue;
+                    if ( !( item in backups.ready_to_finish_lender ) ) continue;
                     var time_left = timelock - current_blockheight;
                     var time_left_hr_version = convertHMS( time_left * 10 * 60 );
                     var real_time_left = Number( String( time_left ) );
@@ -1507,8 +1525,8 @@
                     html = html + `<p>When payment is due: block ${timelock} (~${due_date})</p>`;
                     html = html + `<p>Current block: block ${current_blockheight}</p>`;
                     html = html + `<p>Time til then: ${time_left} ${block_or_blocks} (~${time_left_hr_version})</p>`;
-                    if ( !time_left ) html = html + `<p>Time's up! <span class="take_collateral" data-can_or_cant="can" data-vin="${textToHex( JSON.stringify( ready_to_finish_lender[ item ][ 1 ] ) )}" data-borrower="${borrower}" data-custom_utxo="${utxos_for_this_transaction[ 0 ][ "txid" ] + utxos_for_this_transaction[ 0 ][ "vout" ]}" data-timelock="${timelock}" data-target="${ready_to_finish_lender[ item ][ 2 ]}" data-script="${textToHex( JSON.stringify( ready_to_finish_lender[ item ][ 3 ] ) )}" data-cblock="${ready_to_finish_lender[ item ][ 4 ]}" style="color: blue; text-decoration: underline; cursor: pointer;">Take the collateral</span></p>`;
-                    else html = html + `<p>You can't <span class="take_collateral" data-can_or_cant="cant" data-vin="${textToHex( JSON.stringify( ready_to_finish_lender[ item ][ 1 ] ) )}" data-borrower="${borrower}" data-custom_utxo="${utxos_for_this_transaction[ 0 ][ "txid" ] + utxos_for_this_transaction[ 0 ][ "vout" ]}" data-timelock="${timelock}" data-target="${ready_to_finish_lender[ item ][ 2 ]}" data-script="${textToHex( JSON.stringify( ready_to_finish_lender[ item ][ 3 ] ) )}" data-cblock="${ready_to_finish_lender[ item ][ 4 ]}" style="color: blue; text-decoration: underline; cursor: pointer;">take the collateral</span> til the borrower runs out of time to repay you, but you can try anyway</p>`;
+                    if ( !time_left ) html = html + `<p>Time's up! <span class="take_collateral" data-can_or_cant="can" data-vin="${textToHex( JSON.stringify( backups.ready_to_finish_lender[ item ][ 1 ] ) )}" data-borrower="${borrower}" data-custom_utxo="${utxos_for_this_transaction[ 0 ][ "txid" ] + utxos_for_this_transaction[ 0 ][ "vout" ]}" data-timelock="${timelock}" data-target="${backups.ready_to_finish_lender[ item ][ 2 ]}" data-script="${textToHex( JSON.stringify( backups.ready_to_finish_lender[ item ][ 3 ] ) )}" data-cblock="${backups.ready_to_finish_lender[ item ][ 4 ]}" style="color: blue; text-decoration: underline; cursor: pointer;">Take the collateral</span></p>`;
+                    else html = html + `<p>You can't <span class="take_collateral" data-can_or_cant="cant" data-vin="${textToHex( JSON.stringify( backups.ready_to_finish_lender[ item ][ 1 ] ) )}" data-borrower="${borrower}" data-custom_utxo="${utxos_for_this_transaction[ 0 ][ "txid" ] + utxos_for_this_transaction[ 0 ][ "vout" ]}" data-timelock="${timelock}" data-target="${backups.ready_to_finish_lender[ item ][ 2 ]}" data-script="${textToHex( JSON.stringify( backups.ready_to_finish_lender[ item ][ 3 ] ) )}" data-cblock="${backups.ready_to_finish_lender[ item ][ 4 ]}" style="color: blue; text-decoration: underline; cursor: pointer;">take the collateral</span> til the borrower runs out of time to repay you, but you can try anyway</p>`;
                     var div = document.createElement( "div" );
                     div.setAttribute( "data-contract", contract );
                     div.classList.add( "active_contract_lender" );
@@ -1530,7 +1548,7 @@
                         var outputs = [];
                         var sum_of_values = 0;
                         inputs.forEach( item => sum_of_values = sum_of_values + item[ "prevout" ][ "value" ] );
-                        var backup_words = sessionStorage[ "backup_words" ];
+                        var backup_words = backups[ "backup_words" ];
                         var change_address = await alt_getFirstUnusedChangeAddress( backup_words, "testnet/" );
                         //there is only 1 output and 1 output so I just add 104 bytes for the input and, for the output, 33 bytes for the scriptPubkey and 4 bytes for the value
                         var txsize = 64 + 32 + 8;
@@ -1726,12 +1744,12 @@
             }
 
             var displayHistory = async () => {
-                if ( Object.keys( user_history[ "loan_history" ] ).length ) {
+                if ( Object.keys( backups.user_history[ "loan_history" ] ).length ) {
                     $( '.historical_loan_contracts_label' ).classList.remove( "hidden" );
                     $( '.historical_loan_contracts' ).classList.remove( "hidden" );
                     $( '.view_history' ).classList.remove( "hidden" );
                 }
-                if ( Object.keys( user_history[ "borrow_history" ] ).length ) {
+                if ( Object.keys( backups.user_history[ "borrow_history" ] ).length ) {
                     $( '.historical_borrow_contracts_label' ).classList.remove( "hidden" );
                     $( '.historical_borrow_contracts' ).classList.remove( "hidden" );
                     $( '.view_history' ).classList.remove( "hidden" );
@@ -1740,14 +1758,14 @@
                 var borrow_losses = 0;
                 var html_for_historical_borrows = document.createElement( "div" );
                 var current_blockheight = await getBlockheight( "" );
-                var i; for ( i=0; i<Object.keys( user_history[ "borrow_history" ] ).length; i++ ) {
-                    var item = Object.keys( user_history[ "borrow_history" ] )[ i ];
-                    var contract = user_history[ "borrow_history" ][ item ][ "msg" ][ "contract" ];
-                    var principle = user_history[ "borrow_history" ][ item ][ "msg" ][ "principle" ];
-                    var timelock = user_history[ "borrow_history" ][ item ][ "msg" ][ "timelock" ];
-                    var fee_to_borrow = user_history[ "borrow_history" ][ item ][ "original_offer" ][ "fee_to_borrow" ];
-                    var duration_of_loan = user_history[ "borrow_history" ][ item ][ "original_offer" ][ "duration_of_loan" ];
-                    var collateral_for_loan = user_history[ "borrow_history" ][ item ][ "original_offer" ][ "collateral_for_loan" ];
+                var i; for ( i=0; i<Object.keys( backups.user_history[ "borrow_history" ] ).length; i++ ) {
+                    var item = Object.keys( backups.user_history[ "borrow_history" ] )[ i ];
+                    var contract = backups.user_history[ "borrow_history" ][ item ][ "msg" ][ "contract" ];
+                    var principle = backups.user_history[ "borrow_history" ][ item ][ "msg" ][ "principle" ];
+                    var timelock = backups.user_history[ "borrow_history" ][ item ][ "msg" ][ "timelock" ];
+                    var fee_to_borrow = backups.user_history[ "borrow_history" ][ item ][ "original_offer" ][ "fee_to_borrow" ];
+                    var duration_of_loan = backups.user_history[ "borrow_history" ][ item ][ "original_offer" ][ "duration_of_loan" ];
+                    var collateral_for_loan = backups.user_history[ "borrow_history" ][ item ][ "original_offer" ][ "collateral_for_loan" ];
                     var collateral_requirement = principle * Number( ( collateral_for_loan / 100 ).toFixed( 2 ) );
                     var repayment_value = Math.round( principle * Number( `1.${fee_to_borrow}` ) );
                     var due_timestamp = estimateTimestampBasedOnBlockheight( timelock, current_blockheight );
@@ -1816,11 +1834,11 @@
                 var loan_losses = 0;
                 var html_for_historical_loans = document.createElement( "div" );
                 var current_blockheight = await getBlockheight( "" );
-                var i; for ( i=0; i<Object.keys( user_history[ "loan_history" ] ).length; i++ ) {
-                    var item = Object.keys( user_history[ "loan_history" ] )[ i ];
-                    var contract = user_history[ "loan_history" ][ item ][ 0 ];
-                    var accept_msg = user_history[ "loan_history" ][ item ][ 1 ];
-                    var original_offer = user_history[ "loan_history" ][ item ][ 2 ];
+                var i; for ( i=0; i<Object.keys( backups.user_history[ "loan_history" ] ).length; i++ ) {
+                    var item = Object.keys( backups.user_history[ "loan_history" ] )[ i ];
+                    var contract = backups.user_history[ "loan_history" ][ item ][ 0 ];
+                    var accept_msg = backups.user_history[ "loan_history" ][ item ][ 1 ];
+                    var original_offer = backups.user_history[ "loan_history" ][ item ][ 2 ];
                     var original_offer_id = item;
                     var principle = accept_msg[ "principle" ];
                     var timelock = accept_msg[ "timelock" ];
@@ -2009,9 +2027,21 @@
                 };
                 var signedOffer = await getSignedEvent( offerEvent, privKey );
                 socket.send(JSON.stringify(['EVENT', signedOffer]));
-                delete my_offers[ offer_id ];
-                sessionStorage[ "my_offers" ] = JSON.stringify( my_offers );
+                delete backups.my_offers[ offer_id ];
+                localStorage[ "backups" ] = JSON.stringify( backups );
                 $( `div[ data-offer_id="${offer_id}" ]` ).remove();
+            }
+            function saveData( data, fileName ) {
+                var a = document.createElement("a");
+                document.body.appendChild(a);
+                a.style = "display: none";
+                var json = JSON.stringify(data);
+                var blob = new Blob([json], {type: "octet/stream"});
+                var url = window.URL.createObjectURL(blob);
+                a.href = url;
+                a.download = fileName;
+                a.click();
+                window.URL.revokeObjectURL(url);
             }
         </script>
         <script>
@@ -2024,7 +2054,8 @@
                 var oid = $_GET[ "offer" ].substring( 64, 128 );
                 relay = hexToText( $_GET[ "offer" ].substring( 128 ) );
                 setTimeout( () => {
-                    if ( !offer_found ) showModal( `It looks like your counterparty's offer expired, please ask them to send a fresh one` );
+                    if ( !offer_found && !$( '.logout' ).classList.contains( "hidden" ) ) showModal( `It looks like your counterparty's offer expired, please ask them to send a fresh one` );
+                    if ( !offer_found && $( '.logout' ).classList.contains( "hidden" ) ) showModal( `It looks like you are logged out, please log in or create an account to view the private offer you clicked on` );
                 }, 4000 );
             }
             var privKey, pubKey;
@@ -2070,11 +2101,13 @@
         <div class="homepage">
             <div class="login_buttons">
                 <button class="new_account">New account</button>
-                <button class="login">Log in</button>
+                <button class="login hidden">Log in</button>
+                <button class="import_data">Import</button>
                 <button class="logout hidden">Log out</button>
                 <button class="manage_wallet hidden">Manage wallet</button>
                 <button class="new_loan hidden">New loan</button>
                 <button class="view_history hidden">History</button>
+                <button class="backup_data hidden">Backup data</button>
             </div>
             <h2>Loan offers</h2>
             <div class="orderbook">
@@ -2159,6 +2192,31 @@
             <p><button class="send_pmt">Send</button></p>
         </div>
         <script>
+            var import_data = file => {
+                var fileReader = new FileReader();
+                fileReader.onloadend = () => {
+                    var b64 = fileReader.result.toString().substring( fileReader.result.toString().indexOf( "base64," ) + 7 );
+                    var text = hexToText( base64ToHex( b64 ) );
+                    if ( !isValidJson( text ) ) return;
+                    backups = JSON.parse( text );
+                    localStorage[ "backups" ] = JSON.stringify( backups );
+                    $( '.login' ).click();
+                    $( '.x_modal' ).click();
+                }
+                fileReader.readAsDataURL( file );
+            }
+            $( '.backup_data' ).onclick = () => {
+                var fileName = "loan_shark_backup.json";
+                saveData( backups, fileName );
+            }
+            $( '.import_data' ).onclick = () => {
+                showModal( `
+                    <form>
+                        <p style="font-weight: bold;">Upload your backup file</p>
+                        <p><input type="file" onchange="{import_data( this.files[ 0 ] );}" /></p>
+                    </form>
+                ` );
+            }
             $$( '.back_to_wallet' ).forEach( item => {
                 item.onclick = () => hider( 'wallet' );
             });
@@ -2176,7 +2234,7 @@
             }
             $( '.submit_loan_offer' ).onclick = async () => {
                 var btc_holdings = 0;
-                utxos.forEach(  utxo => btc_holdings = btc_holdings + utxo[ "amount" ] );
+                backups.utxos.forEach(  utxo => btc_holdings = btc_holdings + utxo[ "amount" ] );
                 var offer = {}
                 offer[ "duration_of_loan" ] = Number( $( '.new_loan_page .duration_of_loan' ).value.split( " " )[ 0 ] );
                 offer[ "fee_to_borrow" ] = Number( $( '.new_loan_page .fee_to_borrow' ).value );
@@ -2197,8 +2255,8 @@
                 if ( !make_private ) socket.send(JSON.stringify(['EVENT', signedOffer]));
                 else offer[ "private" ] = true;
                 offer[ "timestamp" ] = Math.floor( Date.now() / 1000 );
-                my_offers[ identifier ] = offer;
-                sessionStorage[ "my_offers" ] = JSON.stringify( my_offers );
+                backups.my_offers[ identifier ] = offer;
+                localStorage[ "backups" ] = JSON.stringify( backups );
                 if ( !make_private ) return;
                 var rando_sec = bytesToHex( nobleSecp256k1.utils.randomPrivateKey() );
                 var rando_pub = nobleSecp256k1.getPublicKey( rando_sec, true ).substring( 2 );
@@ -2217,19 +2275,21 @@
             }
             $( '.login' ).onclick = async () => {
                 if ( !page_loaded ) return;
-                var backup_words = sessionStorage[ "backup_words" ];
+                var backup_words = backups[ "backup_words" ];
                 if ( !backup_words ) {
                     sessionStorage.removeItem( "modal_cleared" );
-                    showModal( `<p>Enter your 12 words</p><p><input class="modal_twelve_words"></p><p><button class="modal_submit_twelve_words" onclick="sessionStorage.backup_words = $( '.modal_twelve_words' ).value;sessionStorage.modal_cleared = true;">Submit</button></p>`, true );
+                    showModal( `<p>Enter your 12 words</p><p><input class="modal_twelve_words"></p><p><button class="modal_submit_twelve_words" onclick="backups.backup_words = $( '.modal_twelve_words' ).value;localStorage.backups = JSON.stringify( backups );sessionStorage.modal_cleared = true;">Submit</button></p>`, true );
                     $( '.x_modal' ).classList.add( "hidden" );
                     await getNote( "modal_cleared" );
                     modalVanish();
                     $( '.x_modal' ).classList.remove( "hidden" );
-                    var backup_words = sessionStorage[ "backup_words" ];
+                    var backup_words = backups[ "backup_words" ];
                 }
-                if ( !backup_words ) sessionStorage.removeItem( "backup_words" );
+                if ( !backup_words ) backups[ "backup_words" ] = "";
+                localStorage[ "backups" ] = JSON.stringify( backups );
                 if ( !backup_words ) return;
-                if ( !bip39.validateMnemonic( backup_words ) ) sessionStorage.removeItem( "backup_words" );
+                if ( !bip39.validateMnemonic( backup_words ) ) backups[ "backup_words" ] = "";
+                if ( !bip39.validateMnemonic( backup_words ) ) localStorage[ "backups" ] = JSON.stringify( backups );
                 if ( !bip39.validateMnemonic( backup_words ) ) return showModal( `Your backup words are invalid, try again` );
                 var xprv = getXprvFromWords( backup_words, "44'" );
                 var keypair = getKeypairFromXprv( xprv, 0 );
@@ -2268,26 +2328,42 @@
                     var subscription = [ "REQ", subId, filter1, filter2 ];
                     socket.send(JSON.stringify( subscription ));
                 });
-                $( '.login' ).classList.add( "hidden" );
+                $( '.import_data' ).classList.add( "hidden" );
                 $( '.logout' ).classList.remove( "hidden" );
                 $( '.manage_wallet' ).classList.remove( "hidden" );
                 $( '.new_loan' ).classList.remove( "hidden" );
+                $( '.backup_data' ).classList.remove( "hidden" );
             }
             $( '.logout' ).onclick = () => {
-                $( '.login' ).classList.remove( "hidden" );
+                var conf = true;
+                if ( !!Object.keys( backups.user_history.loan_history ).length || !!Object.keys( backups.user_history.borrow_history ).length ) conf = confirm( `Logging out will permanently clear your transaction history so make sure you've backed it up first. Click ok to log out or cancel to not do that yet` );
+                if ( !conf ) return;
+                $( '.import_data' ).classList.remove( "hidden" );
                 $( '.logout' ).classList.add( "hidden" );
                 $( '.manage_wallet' ).classList.add( "hidden" );
                 $( '.new_loan' ).classList.add( "hidden" );
                 sessionStorage.clear();
-                utxos = [];
+                localStorage.clear();
+                backups = {
+                    backup_words: "",
+                    utxos: [],
+                    my_offers: {},
+                    ready_to_finish: {},
+                    ready_to_finish_lender: {},
+                    user_history: {
+                        loan_history: {},
+                        borrow_history: {},
+                    }
+                }
                 utxos_loaded = false;
                 $( '.balance' ).innerText = `loading...`;
             }
             $( '.new_account' ).onclick = async () => {
-                var backup_words = sessionStorage[ "backup_words" ];
+                var backup_words = backups[ "backup_words" ];
                 if ( backup_words ) return showModal( `You already have an account and you are logged in. Log out to make a new one` );
-                sessionStorage[ "backup_words" ] = generateWords();
-                var backup_words = sessionStorage[ "backup_words" ];
+                backups[ "backup_words" ] = generateWords();
+                localStorage[ "backups" ] = JSON.stringify( backups );
+                var backup_words = backups[ "backup_words" ];
                 sessionStorage.removeItem( "modal_cleared" );
                 showModal( `<p>Save your private keys or you will lose your money:</p><p>${backup_words}</p>`, true );
                 await getNote( "modal_cleared" );
@@ -2304,7 +2380,7 @@
                 hider( 'send_page' );
             }
             $( '.receive' ).onclick = async () => {
-                var backup_words = sessionStorage[ "backup_words" ];
+                var backup_words = backups[ "backup_words" ];
                 if ( !backup_words ) return;
                 var address = await alt_getFirstUnusedReceiveAddress( backup_words, "testnet/" );
                 var url = "bitcoin:" + address;
