@@ -458,6 +458,7 @@
                 });
                 var txhex = tapscript.Tx.encode( txdata ).hex;
                 var txid = await pushBTCpmt( txhex, "" );
+                if ( txid.includes( "error" ) ) return showModal( `<p>Oh no! There was an error with your transaction, please try again. Here is the error message:</p><p>${txid}</p><p>Hint: usually I get this error when my utxo set is out of date. Give it time to update before trying again. It often takes about 2 minutes and it may say you have 0 sats for a little bit too before it updates.</p>` );
                 showModal( `Success! Here is your txid: <a href="https://mutinynet.com/tx/${txid}" target="_blank">https://mutinynet.com/tx/${txid}</a>` );
             }
 
