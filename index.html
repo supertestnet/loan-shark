@@ -2526,7 +2526,7 @@
                 socket = {}
                 socket = new WebSocket( backups.relay );
                 socket.addEventListener('message', async message => {
-                    if ( fake_contracts_loaded ) return;
+                    if ( !fake_contracts_loaded ) return;
                     var [ type, subId, event ] = JSON.parse( message.data );
                     var { kind, content } = event || {}
                     if ( !event || event === true ) return;
