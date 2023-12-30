@@ -55,7 +55,7 @@
                 margin-bottom: 1rem;
                 border-radius: 1rem;
             }
-            .offer div {
+            .offer div, .borrow_offer div {
                 margin-bottom: 1rem;
             }
             .offer_wizard {
@@ -127,6 +127,7 @@
                 relay: "wss://nostrue.com",
                 utxos: [],
                 my_offers: {},
+                my_borrow_offers: {},
                 ready_to_finish: {},
                 ready_to_finish_lender: {},
                 user_history: {
@@ -135,6 +136,9 @@
                 }
             }
             if ( $_GET[ "relay" ] ) backups.relay = $_GET[ "relay" ];
+            var awaiting_offer = false;
+            var awaiting_offer_after_borrow_request = false;
+            if ( $_GET[ "offer" ] ) awaiting_offer = true;
             var utxos_loaded = false;
             var socket = {}
             var messages_handled = [];
@@ -387,6 +391,7 @@
                 $( '.homepage' ).classList.add( "hidden" );
                 $( '.wallet' ).classList.add( "hidden" );
                 $( '.new_loan_page' ).classList.add( "hidden" );
+                $( '.new_borrow_page' ).classList.add( "hidden" );
                 $( '.history' ).classList.add( "hidden" );
                 $( '.send_page' ).classList.add( "hidden" );
                 $( `.${reveal}` ).classList.remove( "hidden" );
@@ -550,8 +555,8 @@
             var handle30062 = event => {
                 var identifier = extractIdentifierFromNostrEvent( event );
                 if ( identifier == "no identifier" ) return;
-                if ( $( `div[ data-offer_id="${identifier}" ]` ) ) {
-                    var offer = $( `div[ data-offer_id="${identifier}" ]` );
+                if ( $( `.orderbook div[ data-offer_id="${identifier}" ]` ) ) {
+                    var offer = $( `.orderbook div[ data-offer_id="${identifier}" ]` );
                     if ( offer.getElementsByClassName( "fill_in_details" )[ 0 ].classList.contains( "hidden" ) ) offer.remove();
                     else return;
                 }
@@ -563,6 +568,7 @@
                 if ( !( "fee_to_borrow" in content ) ) return;
                 if ( !( "collateral_for_loan" in content ) ) return;
                 if ( !( "duration_of_loan" in content ) ) return;
+                if ( content[ "max_to_lend" ] < 546 ) return;
                 var div = document.createElement( 'div' );
                 var min_to_lend = content.min_to_lend;
                 var max_to_lend = content.max_to_lend;
@@ -684,6 +690,92 @@
                 $( '.orderbook' ).append( div );
             }
 
+            var handlePrivate30062 = async event => {
+                var identifier = extractIdentifierFromNostrEvent( event );
+                if ( identifier == "no identifier" ) return;
+                var lender = event.pubkey;
+                if ( !isValidJson( event[ "content" ] ) ) return;
+                var content = JSON.parse( event[ "content" ] );
+                if ( !( "min_to_lend" in content ) ) return;
+                if ( !( "max_to_lend" in content ) ) return;
+                if ( !( "fee_to_borrow" in content ) ) return;
+                if ( !( "collateral_for_loan" in content ) ) return;
+                if ( !( "duration_of_loan" in content ) ) return;
+                if ( content[ "max_to_lend" ] < 546 ) return;
+                var min_to_lend = content.min_to_lend;
+                var max_to_lend = content.max_to_lend;
+                if ( min_to_lend != max_to_lend ) return;
+                var principle = min_to_lend;
+                var i; for ( i=0; i<Object.keys( backups.my_borrow_offers ).length; i++ ) {
+                    var my_offer = Object.keys( backups.my_borrow_offers )[ i ];
+                    if ( min_to_lend != backups.my_borrow_offers[ my_offer ][ "borrow_amount" ] ) continue;
+                    if ( content.collateral_for_loan != backups.my_borrow_offers[ my_offer ][ "collateral_for_loan" ] ) continue;
+                    if ( content.duration_of_loan != backups.my_borrow_offers[ my_offer ][ "duration_of_loan" ] ) continue;
+                    if ( content.fee_to_borrow != backups.my_borrow_offers[ my_offer ][ "fee_to_borrow" ] ) continue;
+                    var utxos_for_this_transaction = [];
+                    backups.utxos.forEach( utxo => {
+                        utxos_for_this_transaction.push({
+                            "value": utxo[ "amount" ],
+                            "txid": utxo[ "tx_id" ],
+                            "vout": utxo[ "output_number" ],
+                            "address": utxo[ "address" ],
+                        });
+                    });
+                    var current_blockheight = await getBlockheight( "" );
+                    var backup_words = backups[ "backup_words" ];
+                    showProgress( 1, 7, `getting a fresh address` );
+                    console.log( `step 1 of 6, getting a fresh address` );
+                    var recovery_address = await alt_getFirstUnusedChangeAddress( backup_words, "testnet/" );
+                    showProgress( 2, 7, `getting a second fresh address` );
+                    console.log( `step 2 of 6, getting a second fresh address` );
+                    var principle_address = await alt_getFirstUnusedReceiveAddress( backup_words, "testnet/" );
+                    var timelock = content.duration_of_loan * 30 * 144 + current_blockheight;
+                    if ( $_GET[ "test_short_loans" ] ) timelock = current_blockheight + Number( $_GET[ "test_short_loans" ] );
+                    var script_timelock = convertNumToScript( timelock );
+                    var scripts = [
+                        [ script_timelock, 'OP_CHECKLOCKTIMEVERIFY', 'OP_DROP', lender, 'OP_CHECKSIG' ],
+                        [ 0, lender, 'OP_CHECKSIGADD', pubKey, 'OP_CHECKSIGADD', 2, 'OP_EQUAL' ],
+                        [ 'OP_RETURN', utxos_for_this_transaction[ 0 ][ "txid" ] + utxos_for_this_transaction[ 0 ][ "vout" ] ],
+                    ];
+                    var tree = scripts.map(s => tapscript.Tap.encodeScript(s))
+                    var pubkey = "ab".repeat( 32 );
+                    var [ tpubkey ] = tapscript.Tap.getPubKey(pubkey, { tree });
+                    var contract_address = tapscript.Address.p2tr.fromPubKey( tpubkey, 'testnet' );
+                    showProgress( 3, 7, `waiting for lender's reply` );
+                    console.log( `step 3 of 6, waiting for lender's reply` );
+                    var message_for_lender = {
+                        msg_type: "accept",
+                        msg: {
+                            "offer": identifier,
+                            "utxos": utxos_for_this_transaction,
+                            "principle": principle,
+                            "recovery": recovery_address,
+                            "principle_address": principle_address,
+                            "contract": contract_address,
+                            "timelock": timelock,
+                        }
+                    }
+                    var encrypted = encrypt( privKey, lender, JSON.stringify( message_for_lender ) );
+                    var offerEvent = {
+                        content: encrypted,
+                        created_at: Math.floor(Date.now() / 1000),
+                        kind: 4,
+                        tags: [ [ "p", lender ] ],
+                        pubkey: pubKey,
+                    };
+                    var signedOffer = await getSignedEvent(offerEvent, privKey);
+                    socket.send(JSON.stringify(['EVENT', signedOffer]));
+                    setTimeout( () => {
+                        if ( !sessionStorage[ "lender_replied" ] ) return console.log( `Someone said they would accept your offer but then they stopped interacting, so it is time to abort` );
+                        else sessionStorage.removeItem( "lender_replied" );
+                    }, 15000 );
+                    message_for_lender[ "original_offer" ] = content;
+                    my_accepts[ identifier ] = message_for_lender;
+                    delete backups.my_borrow_offers[ my_offer ];
+                    cancelBorrowOffer( my_offer );
+                }
+            }
+
             var handleFake30062 = event => {
                 var identifier = extractIdentifierFromNostrEvent( event );
                 if ( identifier == "no identifier" ) return;
@@ -700,6 +792,7 @@
                 if ( !( "fee_to_borrow" in content ) ) return;
                 if ( !( "collateral_for_loan" in content ) ) return;
                 if ( !( "duration_of_loan" in content ) ) return;
+                if ( content[ "max_to_lend" ] < 546 ) return;
                 var div = document.createElement( 'div' );
                 var min_to_lend = content.min_to_lend;
                 var max_to_lend = content.max_to_lend;
@@ -752,6 +845,163 @@
                 $( '.fake_orderbook' ).classList.remove( "hidden" );
             }
 
+            var handle30063 = event => {
+                var identifier = extractIdentifierFromNostrEvent( event );
+                if ( identifier == "no identifier" ) return;
+                if ( $( `div[ data-offer_id="${identifier}" ]` ) ) {
+                    if ( event[ "content" ] == "" ) $( `div[ data-offer_id="${identifier}" ]` ).remove();
+                    else return;
+                }
+                var borrower = event.pubkey;
+                if ( !isValidJson( event[ "content" ] ) ) return;
+                var content = JSON.parse( event[ "content" ] );
+                if ( !( "borrow_amount" in content ) ) return;
+                if ( !( "fee_to_borrow" in content ) ) return;
+                if ( !( "collateral_for_loan" in content ) ) return;
+                if ( !( "duration_of_loan" in content ) ) return;
+                if ( content[ "borrow_amount" ] < 546 ) return;
+                var div = document.createElement( 'div' );
+                var borrow_amount = content.borrow_amount;
+                var borrow_amount_real = content.borrow_amount;
+                if ( borrow_amount > 100000 ) {
+                    borrow_amount_real = satsToBitcoin( borrow_amount ) + " btc";
+                } else {
+                    borrow_amount_real = borrow_amount.toLocaleString() + " sats";
+                }
+                if ( borrow_amount > 100000 ) {
+                    borrow_amount_real = satsToBitcoin( borrow_amount ) + " btc";
+                } else {
+                    borrow_amount_real = borrow_amount.toLocaleString() + " sats";
+                }
+                var html = `<div class="borrow_offer bordered">
+                    <div>You will lend: <span class="borrow_amount"></span></div>
+                    <div>You will get: <span class="fee_to_borrow"></span></div>
+                    <div>Or: <span class="collateral"></span>% of the principle (if they fail to pay off their loan)</div>
+                    <div>Loan duration: <span class="duration_of_loan"></span> months</div>`;
+                if ( event.pubkey == pubKey ) html += `<div><button class="cancel_offer" onclick="cancelBorrowOffer( this.parentElement.parentElement.getAttribute( 'data-offer_id' ) );">Cancel offer</button></div>`;
+                if ( event.pubkey == pubKey ) html += `<div><button class="accept_borrow_offer" style="display: none;">Accept offer</button></div>`;
+                else html += `<div><button class="accept_borrow_offer">Accept offer</button></div>`;
+                div.innerHTML = html;
+                div.getElementsByClassName( "borrow_offer" )[ 0 ].setAttribute( "data-timestamp", Math.floor( Date.now() / 1000 ) );
+                div.getElementsByClassName( "borrow_offer" )[ 0 ].setAttribute( "data-pubkey", borrower );
+                div.getElementsByClassName( "borrow_offer" )[ 0 ].setAttribute( "data-offer_id", identifier );
+                div.getElementsByClassName( "borrow_amount" )[ 0 ].setAttribute( "data-borrow_amount", borrow_amount );
+                div.getElementsByClassName( "borrow_amount" )[ 0 ].innerText = borrow_amount_real;
+                div.getElementsByClassName( "fee_to_borrow" )[ 0 ].setAttribute( "data-fee_to_borrow", content.fee_to_borrow );
+                div.getElementsByClassName( "fee_to_borrow" )[ 0 ].innerText = content.fee_to_borrow + `% (${Math.round( borrow_amount * Number( ( content.fee_to_borrow / 100 ).toFixed( 2 ) ) )} sats)`;
+                div.getElementsByClassName( "collateral" )[ 0 ].innerText = content.collateral_for_loan;
+                div.getElementsByClassName( "duration_of_loan" )[ 0 ].innerText = content.duration_of_loan;
+                div.getElementsByClassName( "accept_borrow_offer" )[ 0 ].onclick = async e => {
+                    if ( div.getElementsByClassName( "borrow_offer" )[ 0 ].getAttribute( "data-pubkey" ) == pubKey ) return showModal( `You cannot accept your own offer` );
+                    var principle = Number( borrow_amount );
+                    var collateral = principle * Number( ( content.collateral_for_loan / 100 ).toFixed( 2 ) );
+                    var btc_holdings = 0;
+                    backups.utxos.forEach(  utxo => btc_holdings = btc_holdings + utxo[ "amount" ] );
+                    if ( btc_holdings < principle ) return showModal( `This borrow request for ${principle} sats requires you to lend ${principle} sats to the borrower. You only have ${btc_holdings} sats. Please use the Wallet button to add ${principle - btc_holdings} sats if you wish to continue` );
+
+                    var offer = {}
+                    offer[ "offer" ] = identifier;
+                    offer[ "duration_of_loan" ] = content.duration_of_loan;
+                    offer[ "fee_to_borrow" ] = content.fee_to_borrow;
+                    offer[ "min_to_lend" ] = content.borrow_amount;
+                    offer[ "max_to_lend" ] = content.borrow_amount;
+                    offer[ "collateral_for_loan" ] = content.collateral_for_loan;
+                    var identifier = bytesToHex( nobleSecp256k1.utils.randomPrivateKey() );
+                    var offerEvent = {
+                        content: JSON.stringify( offer ),
+                        created_at: Math.floor( Date.now() / 1000 ),
+                        kind: 30062,
+                        tags: [ [ "d", identifier ] ],
+                        pubkey: pubKey,
+                    };
+                    var signedOffer = await getSignedEvent(offerEvent, privKey);
+                    offer[ "private" ] = true;
+                    offer[ "timestamp" ] = Math.floor( Date.now() / 1000 );
+                    backups.my_offers[ identifier ] = offer;
+                    localStorage[ "backups" ] = JSON.stringify( backups );
+                    var rando_sec = bytesToHex( nobleSecp256k1.utils.randomPrivateKey() );
+                    var rando_pub = nobleSecp256k1.getPublicKey( rando_sec, true ).substring( 2 );
+                    var encrypted = encrypt( privKey, rando_pub, JSON.stringify( signedOffer ) );
+                    var privateOffer = {
+                        content: encrypted,
+                        created_at: Math.floor( Date.now() / 1000 ),
+                        kind: 4,
+                        tags: [ [ "p", rando_pub ] ],
+                        pubkey: pubKey,
+                    };
+                    var signedPrivate = await getSignedEvent(privateOffer, privKey);
+                    socket.send(JSON.stringify(['EVENT', signedPrivate]));
+                    var shareable_url = window.location.protocol + "//" + window.location.hostname + window.location.pathname + "?offer=" + rando_sec + privateOffer.id + textToHex( backups.relay );
+                    var msg_for_borrower = {
+                        msg_type: "private_accept",
+                        msg: shareable_url,
+                    }
+                    var second_encrypted = encrypt( privKey, borrower, JSON.stringify( msg_for_borrower ) );
+                    var privateOffer = {
+                        content: second_encrypted,
+                        created_at: Math.floor( Date.now() / 1000 ),
+                        kind: 4,
+                        tags: [ [ "p", borrower ] ],
+                        pubkey: pubKey,
+                    };
+                    var signedPrivate = await getSignedEvent(privateOffer, privKey);
+                    socket.send(JSON.stringify(['EVENT', signedPrivate]));
+                    console.log( "waiting for borrower's reply" );
+                }
+                $( '.nothing_in_borrow_orderbook' ).classList.add( "hidden" );
+                $( '.borrow_orderbook' ).append( div );
+                $( '.borrow_orderbook' ).classList.remove( "hidden" );
+            }
+
+            var handleFake30063 = event => {
+                var identifier = extractIdentifierFromNostrEvent( event );
+                if ( identifier == "no identifier" ) return;
+                if ( $( `div[ data-offer_id="${identifier}" ]` ) ) return;
+                var borrower = event.pubkey;
+                if ( !isValidJson( event[ "content" ] ) ) return;
+                var content = JSON.parse( event[ "content" ] );
+                if ( !( "borrow_amount" in content ) ) return;
+                if ( !( "fee_to_borrow" in content ) ) return;
+                if ( !( "collateral_for_loan" in content ) ) return;
+                if ( !( "duration_of_loan" in content ) ) return;
+                if ( content[ "borrow_amount" ] < 546 ) return;
+                var div = document.createElement( 'div' );
+                var borrow_amount = content.borrow_amount;
+                var borrow_amount_real = content.borrow_amount;
+                if ( borrow_amount > 100000 ) {
+                    borrow_amount_real = satsToBitcoin( borrow_amount ) + " btc";
+                } else {
+                    borrow_amount_real = borrow_amount.toLocaleString() + " sats";
+                }
+                if ( borrow_amount > 100000 ) {
+                    borrow_amount_real = satsToBitcoin( borrow_amount ) + " btc";
+                } else {
+                    borrow_amount_real = borrow_amount.toLocaleString() + " sats";
+                }
+                var html = `<div class="borrow_offer bordered">
+                    <div>You will lend: <span class="borrow_amount"></span></div>
+                    <div>You will get: <span class="fee_to_borrow"></span></div>
+                    <div>Or: <span class="collateral"></span>% of the principle (if they fail to pay off their loan)</div>
+                    <div>Loan duration: <span class="duration_of_loan"></span> months</div>`;
+                if ( event.pubkey == pubKey ) html += `<div><button class="cancel_offer" onclick="cancelBorrowOffer( this.parentElement.parentElement.getAttribute( 'data-offer_id' ) );">Cancel offer</button></div>`;
+                if ( event.pubkey == pubKey ) html += `<div><button class="accept_borrow_offer" style="display: none;">Accept offer</button></div>`;
+                else html += `<div><button class="accept_borrow_offer">Accept offer</button></div>`;
+                div.innerHTML = html;
+                div.getElementsByClassName( "borrow_offer" )[ 0 ].setAttribute( "data-timestamp", Math.floor( Date.now() / 1000 ) );
+                div.getElementsByClassName( "borrow_offer" )[ 0 ].setAttribute( "data-pubkey", borrower );
+                div.getElementsByClassName( "borrow_offer" )[ 0 ].setAttribute( "data-offer_id", identifier );
+                div.getElementsByClassName( "borrow_amount" )[ 0 ].setAttribute( "data-borrow_amount", borrow_amount );
+                div.getElementsByClassName( "borrow_amount" )[ 0 ].innerText = borrow_amount_real;
+                div.getElementsByClassName( "fee_to_borrow" )[ 0 ].setAttribute( "data-fee_to_borrow", content.fee_to_borrow );
+                div.getElementsByClassName( "fee_to_borrow" )[ 0 ].innerText = content.fee_to_borrow + `% (${Math.round( borrow_amount * Number( ( content.fee_to_borrow / 100 ).toFixed( 2 ) ) )} sats)`;
+                div.getElementsByClassName( "collateral" )[ 0 ].innerText = content.collateral_for_loan;
+                div.getElementsByClassName( "duration_of_loan" )[ 0 ].innerText = content.duration_of_loan;
+                div.getElementsByClassName( "accept_borrow_offer" )[ 0 ].onclick = e => {return showModal( `You cannot accept an offer til you create an account or import an existing one` );}
+                $( '.nothing_in_fake_borrow_orderbook' ).classList.add( "hidden" );
+                $( '.fake_borrow_orderbook' ).append( div );
+                $( '.fake_borrow_orderbook' ).classList.remove( "hidden" );
+            }
+
             var getXprvFromWords = ( backup_words, pathpart = 0 ) => {
                 var hardened = false;
                 if ( String( pathpart ).includes( "'" ) ) hardened = true;
@@ -786,7 +1036,83 @@
                 if ( !( "msg" in json ) ) return;
                 if ( json[ "msg_type" ] == "accept" ) return handleAccept( JSON.stringify( json[ "msg" ] ), borrower );
                 if ( json[ "msg_type" ] == "finalize" ) return handleFinalize( JSON.stringify( json[ "msg" ] ), borrower );
+                if ( json[ "msg_type" ] == "private_accept" ) return handlePrivateAccept( JSON.stringify( json[ "msg" ] ), borrower );
                 else console.log( borrower, content );
+            }
+
+            var handlePrivateAccept = async ( content, borrower ) => {
+                if ( !Object.keys( backups.my_borrow_offers ).length ) return;
+                var offer = content.substring( content.indexOf( "offer=" ) + 6 );
+                awaiting_offer = true;
+                awaiting_offer_after_borrow_request = true;
+                mysec = offer.substring( 0, 64 );
+                mypub = nobleSecp256k1.getPublicKey( mysec, true ).substring( 2 );
+                oid = offer.substring( 64, 128 );
+                var relay_hex = offer.substring( 128 );
+                if ( relay_hex.endsWith( '"' ) ) relay_hex = relay_hex.substring( 0, relay_hex.length - 1 );
+                var old_relay = backups.relay;
+                var new_relay = hexToText( relay_hex );
+                if ( new_relay != old_relay ) {
+                    backups.relay = hexToText( offer.substring( 128 ) );
+                    try {
+                        socket = new WebSocket( backups.relay );
+                        good_socket = true;
+                    } catch ( e ) {}
+                    socket.addEventListener('message', async message => {
+                        var [ type, subId, event ] = JSON.parse( message.data );
+                        var { kind, content } = event || {}
+                        if ( !event || event === true ) return;
+                        if ( messages_handled.includes( event.id ) ) return;
+                        messages_handled.push( event.id );
+                        var recipient = extractRecipientFromNostrEvent( event );
+                        if ( kind === 4 && recipient == pubKey ) content = await decrypt(privKey, event.pubkey, content);
+                        if ( kind === 4 && $_GET[ "offer" ] && recipient == mypub ) {
+                            content = await decrypt( mysec, event.pubkey, content );
+                            content = JSON.parse( content );
+                            offer_found = true;
+                            return handlePrivate30062( content );
+                        }
+                        if ( kind === 4 ) return handle4( content, event.pubkey );
+                        else console.log( 'content:', content );
+                    });
+                    socket.addEventListener('open', async e => {
+                        console.log( "connected to " + backups.relay );
+                        var timestamp = Math.floor( Date.now() / 1000 );
+                        var timeMinusTen = timestamp - 600;
+                        var subId   = bytesToHex( nobleSecp256k1.utils.randomPrivateKey() ).substring( 0, 16 );
+                        var filter1  = { "#p": [ pubKey ], since: timeMinusTen }
+                        var filter2 = { "ids": [ oid ], since: timeMinusTen }
+                        var subscription = [ "REQ", subId, filter1, filter2 ];
+                        $( '.fake_orderbook' ).classList.add( "hidden" );
+                        $( '.fake_orderbook' ).innerHTML = `<p class="nothing_in_fake_orderbook">None yet</p>`;
+                        $( '.orderbook' ).innerHTML = `<p class="nothing_in_orderbook">None yet</p>`;
+                        $( '.orderbook' ).classList.remove( "hidden" );
+                        $( '.fake_borrow_orderbook' ).classList.add( "hidden" );
+                        $( '.fake_borrow_orderbook' ).innerHTML = `<p class="nothing_in_fake_borrow_orderbook">None yet</p>`;
+                        $( '.borrow_orderbook' ).innerHTML = `<p class="nothing_in_borrow_orderbook">None yet</p>`;
+                        $( '.borrow_orderbook' ).classList.remove( "hidden" );
+                        socket.send(JSON.stringify( subscription ));
+                    });
+                } else {
+                    var timestamp = Math.floor( Date.now() / 1000 );
+                    var timeMinusTen = timestamp - 600;
+                    var subId   = bytesToHex( nobleSecp256k1.utils.randomPrivateKey() ).substring( 0, 16 );
+                    var filter = { "ids": [ oid ], since: timeMinusTen }
+                    var subscription = [ "REQ", subId, filter ];
+                    $( '.fake_orderbook' ).classList.add( "hidden" );
+                    $( '.fake_orderbook' ).innerHTML = `<p class="nothing_in_fake_orderbook">None yet</p>`;
+                    $( '.orderbook' ).innerHTML = `<p class="nothing_in_orderbook">None yet</p>`;
+                    $( '.orderbook' ).classList.remove( "hidden" );
+                    $( '.fake_borrow_orderbook' ).classList.add( "hidden" );
+                    $( '.fake_borrow_orderbook' ).innerHTML = `<p class="nothing_in_fake_borrow_orderbook">None yet</p>`;
+                    $( '.borrow_orderbook' ).innerHTML = `<p class="nothing_in_borrow_orderbook">None yet</p>`;
+                    $( '.borrow_orderbook' ).classList.remove( "hidden" );
+                    socket.send(JSON.stringify( subscription ));
+                    console.log( subscription );
+                }
+                setTimeout( () => {
+                    if ( !offer_found ) showModal( `It looks like your counterparty's offer expired, please ask them to send a fresh one` );
+                }, 4000 );
             }
 
             var handleAccept = async ( content, borrower ) => {
@@ -1297,9 +1623,37 @@
                         localStorage[ "backups" ] = JSON.stringify( backups );
                     }
                 }
+                var i; for ( i=0; i<Object.keys( backups.my_borrow_offers ).length; i++ ) {
+                    var key = Object.keys( backups.my_borrow_offers )[ i ];
+                    var item = backups.my_borrow_offers[ key ];
+                    if ( !( "timestamp" in item ) || item[ "timestamp" ] < now_minus_ten ) {
+                        var offer = JSON.parse( JSON.stringify( backups.my_borrow_offers[ key ] ) );
+                        delete backups.my_borrow_offers[ key ];
+                        localStorage[ "backups" ] = JSON.stringify( backups );
+                        if ( "private" in offer ) continue;
+                        delete offer[ "timestamp" ];
+                        var offerEvent = {
+                            content: JSON.stringify( offer ),
+                            created_at: Math.floor( Date.now() / 1000 ),
+                            kind: 30063,
+                            tags: [ [ "d", key ] ],
+                            pubkey: pubKey,
+                        };
+                        var signedOffer = await getSignedEvent( offerEvent, privKey );
+                        socket.send(JSON.stringify(['EVENT', signedOffer]));
+                        offer[ "timestamp" ] = Math.floor( Date.now() / 1000 );
+                        backups.my_borrow_offers[ key ] = offer;
+                        localStorage[ "backups" ] = JSON.stringify( backups );
+                    }
+                }
                 $$( '.offer' ).forEach( item => {
                     if ( Number( item.getAttribute( "data-timestamp" ) ) < now_minus_ten ) item.parentElement.remove();
                 });
+                if ( !$$( '.offer' ).length ) $( '.nothing_in_orderbook' ).classList.remove( "hidden" );
+                $$( '.borrow_offer' ).forEach( item => {
+                    if ( Number( item.getAttribute( "data-timestamp" ) ) < now_minus_ten ) item.parentElement.remove();
+                });
+                if ( !$$( '.borrow_offer' ).length ) $( '.nothing_in_borrow_orderbook' ).classList.remove( "hidden" );
                 Object.keys( backups.ready_to_finish ).forEach( async ( item, index ) => {
                     var contract = backups.ready_to_finish[ item ][ 1 ][ "msg" ][ "contract" ];
                     //check if address sent money
@@ -1348,6 +1702,15 @@
                         delete backups.ready_to_finish_lender[ item ];
                         localStorage[ "backups" ] = JSON.stringify( backups );
                     }
+                });
+                $$( '.active_contract_lender' ).forEach( item => {
+                    var contract_found = false;
+                    Object.keys( backups.ready_to_finish_lender ).every( contract => {
+                        if ( backups.ready_to_finish_lender[ contract ][ 5 ] == item.getAttribute( "data-contract" ) ) return contract_found = true;
+                        return true;
+                    });
+                    if ( !contract_found ) item.remove();
+                    if ( !$( '.active_contracts_lender' ).children.length ) $( '.active_contracts_lender_div' ).classList.add( "hidden" );
                 });
             }
 
@@ -1816,8 +2179,8 @@
                     </div>
                     ` );
                 }
-                $( '.progressBar' ).style.width = `${percent}%`;
-                $( '.progress_status' ).innerText = msg;
+                if ( $( '.progressBar' ) ) $( '.progressBar' ).style.width = `${percent}%`;
+                if ( $( '.progress_status' ) ) $( '.progress_status' ).innerText = msg;
             }
 
             async function getNote( item ) {
@@ -2129,6 +2492,20 @@
                 localStorage[ "backups" ] = JSON.stringify( backups );
                 $( `div[ data-offer_id="${offer_id}" ]` ).remove();
             }
+            var cancelBorrowOffer = async offer_id => {
+                var offerEvent = {
+                    content: "",
+                    created_at: Math.floor( Date.now() / 1000 ),
+                    kind: 30063,
+                    tags: [ [ "d", offer_id ] ],
+                    pubkey: pubKey,
+                };
+                var signedOffer = await getSignedEvent( offerEvent, privKey );
+                socket.send(JSON.stringify(['EVENT', signedOffer]));
+                delete backups.my_borrow_offers[ offer_id ];
+                localStorage[ "backups" ] = JSON.stringify( backups );
+                if ( $( `div[ data-offer_id="${offer_id}" ]` ) ) $( `div[ data-offer_id="${offer_id}" ]` ).remove();
+            }
             function saveData( data, fileName ) {
                 var a = document.createElement("a");
                 document.body.appendChild(a);
@@ -2147,6 +2524,7 @@
                 socket = {}
                 socket = new WebSocket( backups.relay );
                 socket.addEventListener('message', async message => {
+                    if ( fake_contracts_loaded ) return;
                     var [ type, subId, event ] = JSON.parse( message.data );
                     var { kind, content } = event || {}
                     if ( !event || event === true ) return;
@@ -2158,6 +2536,7 @@
                         return handleFake30062( content );
                     }
                     if ( kind === 30062 ) return handleFake30062( event );
+                    if ( kind === 30063 ) return handleFake30063( event );
                     else console.log( 'content:', content );
                 });
                 socket.addEventListener('open', async e => {
@@ -2165,17 +2544,20 @@
                     var timestamp = Math.floor( Date.now() / 1000 );
                     var timeMinusTen = timestamp - 600;
                     var subId   = bytesToHex( nobleSecp256k1.utils.randomPrivateKey() ).substring( 0, 16 );
-                    if ( !$_GET[ "offer" ] ) var filter  = { "kinds": [ 30062 ], since: timeMinusTen }
+                    if ( !$_GET[ "offer" ] ) var filter  = { "kinds": [ 30062, 30063 ], since: timeMinusTen }
                     else var filter = { "ids": [ oid ], since: timeMinusTen }
                     var subscription = [ "REQ", subId, filter ];
                     if ( socket.readyState == 1 ) socket.send(JSON.stringify( subscription ));
                 });
-                setTimeout( () => {socket.close();}, 5000 );
+                setTimeout( () => {if ( $( '.logout' ).classList.contains( "hidden" ) ) {socket.close(); good_socket = false;}}, 5000 );
             }
         </script>
         <script>
             var { getSharedSecret, schnorr, utils } = nobleSecp256k1;
             var offer_found = false;
+            var mysec;
+            var mypub;
+            var oid;
             if ( $_GET[ "offer" ] ) {
                 var mysec = $_GET[ "offer" ].substring( 0, 64 );
                 var mypub = nobleSecp256k1.getPublicKey( mysec, true ).substring( 2 );
@@ -2234,7 +2616,8 @@
                 <button class="import_data">Import</button>
                 <button class="logout hidden">Log out</button>
                 <button class="manage_wallet hidden">Manage wallet</button>
-                <button class="new_loan hidden">New loan</button>
+                <button class="new_loan hidden">New loan offer</button>
+                <button class="new_borrow hidden">New borrow offer</button>
                 <button class="view_history hidden">History</button>
                 <button class="backup_data hidden">Backup data</button>
             </div>
@@ -2244,6 +2627,13 @@
             </div>
             <div class="fake_orderbook">
                 <p class="nothing_in_fake_orderbook">None yet</p>
+            </div>
+            <h2>Borrow offers</h2>
+            <div class="borrow_orderbook hidden">
+                <p class="nothing_in_borrow_orderbook">None yet</p>
+            </div>
+            <div class="fake_borrow_orderbook">
+                <p class="nothing_in_fake_borrow_orderbook">None yet</p>
             </div>
             <div class="active_contracts_div hidden">
                 <h2>Contracts where you are an active borrower</h2>
@@ -2293,6 +2683,36 @@
                 <input class="privacy_switch" type="checkbox">
             </p>
             <p><button class="submit_loan_offer">Submit</button></p>
+        </div>
+        <div class="new_borrow_page hidden">
+            <p><button class="home">Home</button></p>
+            <p>
+                What amount do you want to borrow? (in sats)
+            </p>
+            <div class="borrow_amount">
+                <input type="number" value="546" step="1">
+            </div>
+            <p>
+                What fee are you willing to pay? (as a percentage)
+            </p>
+            <p><input class="fee_to_borrow" type="number" value="10" step="1" min="0" max="100"></p>
+            <p>
+                How much collateral are you willing to post? (as a percentage)
+            </p>
+            <p><input class="collateral_for_loan" type="number" value="200" step="1" min="1" max="1000"></p>
+            <p>
+                How long should the loan last?
+                <select class="duration_of_loan">
+                    <option>3 months</option>
+                    <option>6 months</option>
+                    <option>12 months</option>
+                </select>
+            </p>
+            <p>
+                Keep offer private?
+                <input class="privacy_switch" type="checkbox">
+            </p>
+            <p><button class="submit_borrow_offer">Submit</button></p>
         </div>
         <div class="history hidden">
             <button class="home">Home</button>
@@ -2405,6 +2825,44 @@
                 var shareable_url = window.location.protocol + "//" + window.location.hostname + window.location.pathname + "?offer=" + rando_sec + privateOffer.id + textToHex( backups.relay );
                 if ( make_private ) showModal( `<a href="${shareable_url}" target="_blank">Click here</a> for a sharable link to your private offer` );
             }
+            $( '.submit_borrow_offer' ).onclick = async () => {
+                var offer = {}
+                offer[ "duration_of_loan" ] = Number( $( '.new_borrow_page .duration_of_loan' ).value.split( " " )[ 0 ] );
+                offer[ "fee_to_borrow" ] = Number( $( '.new_borrow_page .fee_to_borrow' ).value );
+                offer[ "borrow_amount" ] = Number( $( '.new_borrow_page .borrow_amount input' ).value );
+                offer[ "collateral_for_loan" ] = Number( $( '.new_borrow_page .collateral_for_loan' ).value );
+                $( '.home' ).click();
+                var identifier = bytesToHex( nobleSecp256k1.utils.randomPrivateKey() );
+                var offerEvent = {
+                    content: JSON.stringify( offer ),
+                    created_at: Math.floor( Date.now() / 1000 ),
+                    kind: 30063,
+                    tags: [ [ "d", identifier ] ],
+                    pubkey: pubKey,
+                };
+                var signedOffer = await getSignedEvent(offerEvent, privKey);
+                var make_private = $( '.privacy_switch' ).checked;
+                if ( !make_private ) socket.send(JSON.stringify(['EVENT', signedOffer]));
+                else offer[ "private" ] = true;
+                offer[ "timestamp" ] = Math.floor( Date.now() / 1000 );
+                backups.my_borrow_offers[ identifier ] = offer;
+                localStorage[ "backups" ] = JSON.stringify( backups );
+                if ( !make_private ) return;
+                var rando_sec = bytesToHex( nobleSecp256k1.utils.randomPrivateKey() );
+                var rando_pub = nobleSecp256k1.getPublicKey( rando_sec, true ).substring( 2 );
+                var encrypted = encrypt( privKey, rando_pub, JSON.stringify( signedOffer ) );
+                var privateOffer = {
+                    content: encrypted,
+                    created_at: Math.floor( Date.now() / 1000 ),
+                    kind: 4,
+                    tags: [ [ "p", rando_pub ] ],
+                    pubkey: pubKey,
+                };
+                var signedPrivate = await getSignedEvent(privateOffer, privKey);
+                socket.send(JSON.stringify(['EVENT', signedPrivate]));
+                var shareable_url = window.location.protocol + "//" + window.location.hostname + window.location.pathname + "?offer=" + rando_sec + privateOffer.id + textToHex( backups.relay );
+                if ( make_private ) showModal( `<a href="${shareable_url}" target="_blank">Click here</a> for a sharable link to your private offer` );
+            }
             $( '.login' ).onclick = async () => {
                 if ( !page_loaded ) return;
                 var backup_words = backups[ "backup_words" ];
@@ -2439,13 +2897,15 @@
                     messages_handled.push( event.id );
                     var recipient = extractRecipientFromNostrEvent( event );
                     if ( kind === 4 && recipient == pubKey ) content = await decrypt(privKey, event.pubkey, content);
-                    if ( kind === 4 && $_GET[ "offer" ] && recipient == mypub ) {
+                    if ( kind === 4 && awaiting_offer && recipient == mypub ) {
                         content = await decrypt( mysec, event.pubkey, content );
                         content = JSON.parse( content );
                         offer_found = true;
+                        if ( awaiting_offer_after_borrow_request ) return handlePrivate30062( content );
                         return handle30062( content );
                     }
                     if ( kind === 30062 ) return handle30062( event );
+                    if ( kind === 30063 ) return handle30063( event );
                     if ( kind === 4 ) return handle4( content, event.pubkey );
                     else console.log( 'content:', content );
                 });
@@ -2455,19 +2915,24 @@
                     var timeMinusTen = timestamp - 600;
                     var subId   = bytesToHex( nobleSecp256k1.utils.randomPrivateKey() ).substring( 0, 16 );
                     var filter1  = { "#p": [ pubKey ], since: timeMinusTen }
-                    if ( !$_GET[ "offer" ] ) var filter2  = { "kinds": [ 30062 ], since: timeMinusTen }
+                    if ( !$_GET[ "offer" ] ) var filter2  = { "kinds": [ 30062, 30063 ], since: timeMinusTen }
                     else var filter2 = { "ids": [ oid ], since: timeMinusTen }
                     var subscription = [ "REQ", subId, filter1, filter2 ];
                     $( '.fake_orderbook' ).classList.add( "hidden" );
                     $( '.fake_orderbook' ).innerHTML = `<p class="nothing_in_fake_orderbook">None yet</p>`;
                     $( '.orderbook' ).innerHTML = `<p class="nothing_in_orderbook">None yet</p>`;
                     $( '.orderbook' ).classList.remove( "hidden" );
+                    $( '.fake_borrow_orderbook' ).classList.add( "hidden" );
+                    $( '.fake_borrow_orderbook' ).innerHTML = `<p class="nothing_in_fake_borrow_orderbook">None yet</p>`;
+                    $( '.borrow_orderbook' ).innerHTML = `<p class="nothing_in_borrow_orderbook">None yet</p>`;
+                    $( '.borrow_orderbook' ).classList.remove( "hidden" );
                     socket.send(JSON.stringify( subscription ));
                 });
                 $( '.import_data' ).classList.add( "hidden" );
                 $( '.logout' ).classList.remove( "hidden" );
                 $( '.manage_wallet' ).classList.remove( "hidden" );
                 $( '.new_loan' ).classList.remove( "hidden" );
+                $( '.new_borrow' ).classList.remove( "hidden" );
                 $( '.backup_data' ).classList.remove( "hidden" );
             }
             $( '.logout' ).onclick = () => {
@@ -2478,9 +2943,13 @@
                 $( '.logout' ).classList.add( "hidden" );
                 $( '.manage_wallet' ).classList.add( "hidden" );
                 $( '.new_loan' ).classList.add( "hidden" );
+                $( '.new_borrow' ).classList.add( "hidden" );
                 $( '.orderbook' ).classList.add( "hidden" );
                 $( '.fake_orderbook' ).innerHTML = `<p class="nothing_in_fake_orderbook">None yet</p>`;
                 $( '.fake_orderbook' ).classList.remove( "hidden" );
+                $( '.borrow_orderbook' ).classList.add( "hidden" );
+                $( '.fake_borrow_orderbook' ).innerHTML = `<p class="nothing_in_fake_borrow_orderbook">None yet</p>`;
+                $( '.fake_borrow_orderbook' ).classList.remove( "hidden" );
                 fake_contracts_loaded = false;
                 sessionStorage.clear();
                 localStorage.clear();
@@ -2489,6 +2958,7 @@
                     relay: "wss://nostrue.com",
                     utxos: [],
                     my_offers: {},
+                    my_borrow_offers: {},
                     ready_to_finish: {},
                     ready_to_finish_lender: {},
                     user_history: {
@@ -2513,6 +2983,8 @@
                 showModal( `Congratulations, your account is ready and you are logged in` );
                 $( '.orderbook' ).classList.remove( "hidden" );
                 $( '.fake_orderbook' ).classList.add( "hidden" );
+                $( '.borrow_orderbook' ).classList.remove( "hidden" );
+                $( '.fake_borrow_orderbook' ).classList.add( "hidden" );
                 $( '.login' ).click();
             }
             $( '.manage_wallet' ).onclick = () => hider( 'wallet' );
@@ -2548,6 +3020,14 @@
                 $( '.new_loan_page .collateral_for_loan' ).value = "200";
                 $( '.new_loan_page .privacy_switch' ).checked = false;
                 hider( 'new_loan_page' );
+            }
+            $( '.new_borrow' ).onclick = () => {
+                $( '.new_borrow_page .duration_of_loan' ).value = "3 months";
+                $( '.new_borrow_page .fee_to_borrow' ).value = "10";
+                $( '.new_borrow_page .borrow_amount input' ).value = "546";
+                $( '.new_borrow_page .collateral_for_loan' ).value = "200";
+                $( '.new_borrow_page .privacy_switch' ).checked = false;
+                hider( 'new_borrow_page' );
             }
             $( '.view_history' ).onclick = () => hider( 'history' );
             init();
