@@ -1,5 +1,5 @@
 # Loan shark
-Fully collateralized bitcoin loans without custodians, escrows, or margin calls
+Fully collateralized bitcoin only loans without custodians, escrows, or margin calls
 
 # How to try it
 Click here: https://supertestnet.github.io/loan-shark/
