@@ -4,6 +4,10 @@ Fully collateralized bitcoin only loans without custodians, escrows, or margin c
 # How to try it
 Click here: https://supertestnet.github.io/loan-shark/
 
+# Video explainer
+
+[![](https://supertestnet.github.io/loan-shark/loan-shark-thumbnail.png)](https://www.youtube.com/watch?v=EJICv6P48wU)
+
 # Info about old version that used tether
 
 Suppose Alice wants to loan Bob some bitcoins and get them back later with interest. She also wants to secure herself against Bob running away with the bitcoins by means of collateral deposited into a contract by Bob, where the collateral is double the current value of the principle of the loan. Alice and Bob can do this with a multisig bitcoin address and some omni usdt. Bob and Alice must exchange two signatures apiece, which will be explained in a moment, and when they do, Alice and Bob do an atomic swap: Alice sends $100 BTC to Bob and Bob puts $200 USDT into the multisig address.
