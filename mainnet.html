@@ -123,6 +123,7 @@
             for ( var key of url_keys ) $_GET[ key ] = url_params.get( key );
         </script>
         <script>
+            var btc_net = "mempool.space";
             var backups = {
                 backup_words: "",
                 relay: "wss://nostrue.com",
@@ -199,9 +200,8 @@
             }
 
             async function getAddressBalance( address, network ) {
-                //TODO: remove the following line when switching to mempool.space
                 network = "";
-                var nonjson = await getData( "https://mempool.space/" + network + "api/address/" + address );
+                var nonjson = await getData( `https://${btc_net}/` + network + "api/address/" + address );
                 try {
                     var json = JSON.parse( nonjson );
                 } catch( e ) {
@@ -227,9 +227,8 @@
             async function getUTXOs( privkey, network ) {
                 var pubkey = getCompressedPubkeyHexFromPrivkeyHex( privkey );
                 var address = getTaprootAddressFromPrivkeyHex( privkey, network );
-                //TODO: remove the following line when switching to mempool.space
                 network = "";
-                var esplorautxos = await getData( "https://mempool.space/" + network + "api/address/" + address + "/utxo" );
+                var esplorautxos = await getData( `https://${btc_net}/` + network + "api/address/" + address + "/utxo" );
                 esplorautxos = JSON.parse( esplorautxos );
                 var obj = [];
                 esplorautxos.forEach( async ( item, index ) => {
@@ -459,13 +458,12 @@
                 var txhex = tapscript.Tx.encode( txdata ).hex;
                 var txid = await pushBTCpmt( txhex, "" );
                 if ( txid.includes( "error" ) ) return showModal( `<p>Oh no! There was an error with your transaction, please try again. Here is the error message:</p><p>${txid}</p><p>Hint: usually I get this error when my utxo set is out of date. Give it time to update before trying again. It often takes about 2 minutes and it may say you have 0 sats for a little bit too before it updates.</p>` );
-                showModal( `Success! Here is your txid: <a href="https://mempool.space/tx/${txid}" target="_blank">https://mempool.space/tx/${txid}</a>` );
+                showModal( `Success! Here is your txid: <a href="https://${btc_net}/tx/${txid}" target="_blank">https://${btc_net}/tx/${txid}</a>` );
             }
 
             async function getThreeFeeRates( network ) {
-                //TODO: remove the following line when switching to mempool.space
                 network = "";
-                var fees = await getData("https://mempool.space/" + network + "api/v1/fees/recommended");
+                var fees = await getData(`https://${btc_net}/` + network + "api/v1/fees/recommended");
                 fees = JSON.parse(fees);
                 var array = [ fees["minimumFee"], fees["hourFee"], fees["fastestFee"] ];
                 return array;
@@ -532,9 +530,8 @@
             }
 
             async function addressOnceHadMoney( address, network ) {
-                //TODO: remove the following line when switching to mempool.space
                 network = "";
-                var nonjson = await getData( "https://mempool.space/" + network + "api/address/" + address );
+                var nonjson = await getData( `https://${btc_net}/` + network + "api/address/" + address );
                 var json = JSON.parse( nonjson );
                 if ( json[ "chain_stats" ][ "tx_count" ] > 0 || json[ "mempool_stats" ][ "tx_count" ] > 0 ) return true;
                 return false;
@@ -1384,7 +1381,8 @@
                     var utxo = json[ "utxos" ][ i ];
                     var valid = await isUTXOValid( utxo[ "txid" ], utxo[ "vout" ], utxo[ "value" ], utxo[ "address" ], "" );
                     if ( !valid ) {
-                        return showModal( `Aborting because the lender sent you an invalid utxo. Specifically, he said ${utxo[ "txid" ].substring( 0, 4 ) + "..." + utxo[ "txid" ].substring( utxo[ "txid" ].length - 4 )}:${utxo[ "vout" ]} is in address ${utxo[ "address" ]} with a value of ${utxo[ "value" ]} sats, and it isn't, as you can view <a href="${"https://mempool.space/api/address/" + utxo[ "address" ] + "/utxo"}" target="_blank">here</a>` );
+                        var url = `https://${btc_net}/api/address/` + utxo[ "address" ] + "/utxo";
+                        return showModal( `Aborting because the lender sent you an invalid utxo. Specifically, he said ${utxo[ "txid" ].substring( 0, 4 ) + "..." + utxo[ "txid" ].substring( utxo[ "txid" ].length - 4 )}:${utxo[ "vout" ]} is in address ${utxo[ "address" ]} with a value of ${utxo[ "value" ]} sats, and it isn't, as you can view <a href="${url}" target="_blank">here</a>` );
                     }
                     sum_of_values = sum_of_values + utxo[ "value" ];
                     inputs.push({
@@ -1580,7 +1578,7 @@
             }
 
             async function isUTXOValid( txid, vout, value, address, network ) {
-                var esplorautxos = await getData( "https://mempool.space/" + network + "api/address/" + address + "/utxo" );
+                var esplorautxos = await getData( `https://${btc_net}/` + network + "api/address/" + address + "/utxo" );
                 esplorautxos = JSON.parse( esplorautxos );
                 var obj = [];
                 var is_valid = false;
@@ -1592,7 +1590,7 @@
             }
 
             async function getBlockheight( network ) {
-                var data = await getData( `https://mempool.space/${network}api/blocks/tip/height` );
+                var data = await getData( `https://${btc_net}/${network}api/blocks/tip/height` );
                 return Number( data );
             }
 
@@ -1717,7 +1715,7 @@
             }
 
             async function addressOnceSentMoney( address, network ) {
-                var nonjson = await getData( "https://mempool.space/" + network + "api/address/" + address );
+                var nonjson = await getData( `https://${btc_net}/` + network + "api/address/" + address );
                 var json = JSON.parse( nonjson );
                 if ( json[ "chain_stats" ][ "spent_txo_count" ] > 0 || json[ "mempool_stats" ][ "spent_txo_count" ] > 0 ) {
                     return true;
@@ -1757,7 +1755,7 @@
                     var due_date = new Date( due_timestamp * 1000 ).toLocaleDateString();
                     var txinfo = await addressReceivedMoneyInThisTx( contract, "" );
                     if ( !txinfo[ 0 ] ) continue;
-                    var received_info = await getData( `https://mempool.space/api/tx/${txinfo[ 0 ]}` );
+                    var received_info = await getData( `https://${btc_net}/api/tx/${txinfo[ 0 ]}` );
                     var received_status = JSON.parse( received_info )[ "status" ];
                     if ( received_status && "block_height" in received_status ) {
                         var received_block = received_status[ "block_height" ];
@@ -1874,7 +1872,7 @@
                         var txhex = tapscript.Tx.encode( repayment_txdata ).hex;
                         var txid = await pushBTCpmt( txhex, "" );
                         if ( txid.includes( "error" ) ) return showModal( `<p>Oh no! There was an error with your transaction, please try again. Here is the error message:</p><p>${txid}</p><p>Hint: if you tried to pay off a loan right after making it, you should probably wait a few minutes for your utxo set to update. It often takes about 2 minutes and it may say "you have 0 sats" for a little bit too before it updates.</p>` );
-                        showModal( `Success! Here is your txid: <a href="https://mempool.space/tx/${txid}" target="_blank">https://mempool.space/tx/${txid}</a>` );
+                        showModal( `Success! Here is your txid: <a href="https://${btc_net}/tx/${txid}" target="_blank">https://${btc_net}/tx/${txid}</a>` );
                     }
                 });
                 displaying_active_contracts_borrower = false;
@@ -1954,7 +1952,7 @@
                     //but only after the timelock expires -- otherwise they could deposit money there after
                     //waiting til I am likely to delete the contract, and I will never get my money back
                     if ( !txinfo[ 0 ] ) continue;
-                    var received_info = await getData( `https://mempool.space/api/tx/${txinfo[ 0 ]}` );
+                    var received_info = await getData( `https://${btc_net}/api/tx/${txinfo[ 0 ]}` );
                     var received_status = JSON.parse( received_info )[ "status" ];
                     if ( received_status && "block_height" in received_status ) {
                         var received_block = received_status[ "block_height" ];
@@ -2055,8 +2053,8 @@
                         var txhex = tapscript.Tx.encode( seizure_txdata ).hex;
                         if ( can_or_cant == "can" ) {
                             var txid = await pushBTCpmt( txhex, "" );
-                            return showModal( `Success! Here is your txid: <a href="https://mempool.space/tx/${txid}" target="_blank">https://mempool.space/tx/${txid}</a>` );
-                        } else return showModal( `<p>Go here: <a href="https://mempool.space/tx/push" target="_blank">https://mempool.space/tx/push</a></p><p>And try to broadcast this transaction:</p><p>${txhex}</p>` );
+                            return showModal( `Success! Here is your txid: <a href="https://${btc_net}/tx/${txid}" target="_blank">https://${btc_net}/tx/${txid}</a>` );
+                        } else return showModal( `<p>Go here: <a href="https://${btc_net}/tx/push" target="_blank">https://${btc_net}/tx/push</a></p><p>And try to broadcast this transaction:</p><p>${txhex}</p>` );
                     }
                 });
                 displaying_active_contracts_lender = false;
@@ -2100,7 +2098,7 @@
             }
 
             async function pushBTCpmt( rawtx, network ) {
-                var txid = await postData( "https://mempool.space/" + network + "api/tx", rawtx );
+                var txid = await postData( `https://${btc_net}/` + network + "api/tx", rawtx );
                 return txid;
             }
 
@@ -2122,7 +2120,7 @@
                             }
                         }
                     };
-                    xhttp.open( "GET", `https://mempool.space/${network}api/tx/` + txid, true );
+                    xhttp.open( "GET", `https://${btc_net}/${network}api/tx/` + txid, true );
                     xhttp.send();
                 });
             }
@@ -2131,7 +2129,7 @@
                 var txid;
                 var vout;
                 var amt;
-                var nonjson = await getData( "https://mempool.space/" + network + "api/address/" + address + "/txs" );
+                var nonjson = await getData( `https://${btc_net}/` + network + "api/address/" + address + "/txs" );
                 var json = JSON.parse( nonjson);
                 json.forEach( tx => {
                     tx["vout"].forEach( ( output, index ) => {
@@ -2235,7 +2233,7 @@
                     var due_date = new Date( due_timestamp * 1000 ).toLocaleDateString();
                     var txinfo = await addressReceivedMoneyInThisTx( contract, "" );
                     if ( !txinfo[ 0 ] ) continue;
-                    var received_info = await getData( `https://mempool.space/api/tx/${txinfo[ 0 ]}` );
+                    var received_info = await getData( `https://${btc_net}/api/tx/${txinfo[ 0 ]}` );
                     var received_status = JSON.parse( received_info )[ "status" ];
                     if ( received_status && "block_height" in received_status ) {
                         var received_block = received_status[ "block_height" ];
@@ -2249,7 +2247,7 @@
                     var status = "in progress";
                     var txid_of_spending_tx = await addressSentMoneyInThisTx( contract, txinfo[ 0 ], "" );
                     if ( txid_of_spending_tx ) status = "paid off";
-                    if ( txid_of_spending_tx ) var more_info = await getData( `https://mempool.space/api/tx/${txid_of_spending_tx}` );
+                    if ( txid_of_spending_tx ) var more_info = await getData( `https://${btc_net}/api/tx/${txid_of_spending_tx}` );
                     if ( more_info ) var amount_sent = JSON.parse( more_info )[ "vout" ][ 0 ][ "value" ];
                     if ( more_info ) var tx_status = JSON.parse( more_info )[ "status" ];
                     if ( tx_status && "block_height" in tx_status ) {
@@ -2314,7 +2312,7 @@
                     var repayment_value = Math.round( principle * Number( `1.${fee_to_borrow}` ) );
                     var txinfo = await addressReceivedMoneyInThisTx( contract, "" );
                     if ( !txinfo[ 0 ] ) continue;
-                    var received_info = await getData( `https://mempool.space/api/tx/${txinfo[ 0 ]}` );
+                    var received_info = await getData( `https://${btc_net}/api/tx/${txinfo[ 0 ]}` );
                     var received_status = JSON.parse( received_info )[ "status" ];
                     if ( received_status && "block_height" in received_status ) {
                         var received_block = received_status[ "block_height" ];
@@ -2328,7 +2326,7 @@
                     var status = "in progress";
                     var txid_of_spending_tx = await addressSentMoneyInThisTx( contract, txinfo[ 0 ], "" );
                     if ( txid_of_spending_tx ) status = "paid off";
-                    if ( txid_of_spending_tx ) var more_info = await getData( `https://mempool.space/api/tx/${txid_of_spending_tx}` );
+                    if ( txid_of_spending_tx ) var more_info = await getData( `https://${btc_net}/api/tx/${txid_of_spending_tx}` );
                     if ( more_info ) var amount_sent = JSON.parse( more_info )[ "vout" ][ 0 ][ "value" ];
                     if ( more_info ) var tx_status = JSON.parse( more_info )[ "status" ];
                     if ( tx_status && "block_height" in tx_status ) {
@@ -2382,7 +2380,7 @@
 
             async function addressSentMoneyInThisTx( address, funding_txid, network ) {
                 return new Promise( async function( resolve, reject ) {
-                    var nonjson = await getData( "https://mempool.space/" + network + "/api/address/" + address + "/txs" );
+                    var nonjson = await getData( `https://${btc_net}/` + network + "/api/address/" + address + "/txs" );
                     json = JSON.parse( nonjson );
                     json.forEach( function( tx ) {
                         tx[ "vin" ].forEach( function( input ) {
