@@ -254,9 +254,8 @@
                         receive_num = i;
                         receive_gap = gap;
                         var html =`<h3>Debug info</h3><p>Scanning for utxos. There are two sets of bitcoin addresses in your wallet, "receive" addresses and "change" addresses. We scan them both with a gap limit of 20, then update your balance, then restart.</p>`;
+                        html +=`<p>Number of receive addresses checked: ${receive_num}</p><p>Gap limit for your receive addresses: ${receive_gap}</p><p>Number of change addresses checked: ${0}</p><p>Gap limit for your change addresses: ${0} <-- when this is 20, your balance will update</p><h3>More info</h3><p> First we look for utxos in your receive addresses, using a gap limit of 20. The gap resets to 0 whenever a utxo is found. When it reaches 20 the site is done checking for utxos among your receive addressess. Then we repeat the procedure for your change addresses, with an identical gap limit. When the receive_gap and the change_gap both reach 20, we update your balance using the utxo information we now have, and start rechecking.</p>`;
                         $( '.wallet_debug' ).innerHTML = html;
-                        var html =`<p>Number of receive addresses checked: ${receive_num}</p><p>Gap limit for your receive addresses: ${receive_gap}</p><p>Number of change addresses checked: ${0}</p><p>Gap limit for your change addresses: ${0} <-- when this is 20, your balance will update</p><h3>More info</h3><p> First we look for utxos in your receive addresses, using a gap limit of 20. The gap resets to 0 whenever a utxo is found. When it reaches 20 the site is done checking for utxos among your receive addressess. Then we repeat the procedure for your change addresses, with an identical gap limit. When the receive_gap and the change_gap both reach 20, we update your balance using the utxo information we now have, and start rechecking.</p>`;
-                        $( '.wallet_debug' ).innerHTML += html;
                         if ( gap >= 20 ) break;
                         var path = `86'/0'/0'`;
                         var privkey = getPrivkeyHex( backup_words, path, i1 + i2 );
@@ -288,9 +287,8 @@
                         change_num = i;
                         change_gap = gap;
                         var html =`<h3>Debug info</h3><p>Scanning for utxos. There are two sets of bitcoin addresses in your wallet, "receive" addresses and "change" addresses. We scan them both with a gap limit of 20, then update your balance, then restart.</p><p>Number of receive addresses checked: ${receive_num}</p><p>Gap limit for your receive addresses: ${receive_gap}</p>`;
+                        html +=`<p>Number of change addresses checked: ${change_num}</p><p>Gap limit for your change addresses: ${change_gap} <-- when this is 20, your balance will update</p><h3>More info</h3><p> First we look for utxos in your receive addresses, using a gap limit of 20. The gap resets to 0 whenever a utxo is found. When it reaches 20 the site is done checking for utxos among your receive addressess. Then we repeat the procedure for your change addresses, with an identical gap limit. When the receive_gap and the change_gap both reach 20, we update your balance using the utxo information we now have, and start rechecking.</p>`;
                         $( '.wallet_debug' ).innerHTML = html;
-                        var html =`<p>Number of change addresses checked: ${change_num}</p><p>Gap limit for your change addresses: ${change_gap} <-- when this is 20, your balance will update</p><h3>More info</h3><p> First we look for utxos in your receive addresses, using a gap limit of 20. The gap resets to 0 whenever a utxo is found. When it reaches 20 the site is done checking for utxos among your receive addressess. Then we repeat the procedure for your change addresses, with an identical gap limit. When the receive_gap and the change_gap both reach 20, we update your balance using the utxo information we now have, and start rechecking.</p>`;
-                        $( '.wallet_debug' ).innerHTML += html;
                         if ( gap >= 20 ) break;
                         var path = "86'/0'/1'";
                         var privkey = getPrivkeyHex( backup_words, path, i1 + i2 );
