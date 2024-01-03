@@ -348,14 +348,18 @@
                 if ( getting_receive ) return;
                 getting_receive = true;
                 var backup_words = backups[ "backup_words" ];
-                fresh_receive_address = await getFirstUnusedReceiveAddress( backup_words, "" );
+                try {
+                    fresh_receive_address = await getFirstUnusedReceiveAddress( backup_words, "" );
+                } catch ( e ) {}
                 getting_receive = false;
             }
             var makeChange = async () => {
                 if ( getting_change ) return;
                 getting_change = true;
                 var backup_words = backups[ "backup_words" ];
-                fresh_change_address = await getFirstUnusedChangeAddress( backup_words, "" );
+                try {
+                    fresh_change_address = await getFirstUnusedChangeAddress( backup_words, "" );
+                } catch( e ) {}
                 getting_change = false;
             }
             var init = async test => {
@@ -493,7 +497,11 @@
                 var i; for ( i=0; i<100_000; i++ ) {
                     var privkey = getPrivkeyHex( backup_words, path, i );
                     var address = getTaprootAddressFromPrivkeyHex( privkey, network );
-                    var address_is_used = await addressOnceHadMoney( address, network );
+                    try {
+                        var address_is_used = await addressOnceHadMoney( address, network );
+                    } catch( e ) {
+                        var address_is_used = false;
+                    }
                     if ( !address_is_used ) {
                         first_unused_address = address;
                         break;
@@ -508,7 +516,11 @@
                 var i; for ( i=0; i<100_000; i++ ) {
                     var privkey = getPrivkeyHex( backup_words, path, i );
                     var address = getTaprootAddressFromPrivkeyHex( privkey, network );
-                    var address_is_used = await addressOnceHadMoney( address, network );
+                    try {
+                        var address_is_used = await addressOnceHadMoney( address, network );
+                    } catch( e ) {
+                        var address_is_used = false;
+                    }
                     if ( !address_is_used ) {
                         first_unused_change_address = address;
                         break;
