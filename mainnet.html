@@ -297,18 +297,23 @@
                         var path = "86'/0'/1'";
                         var privkey = getPrivkeyHex( backup_words, path, i1 + i2 );
                         var address = getTaprootAddressFromPrivkeyHex( privkey, network );
+                        console.log( i, 0 );
                         var balance = await getAddressBalance( address, network );
+                        console.log( i, 1 );
                         try {
                             var once_had_money = await addressOnceHadMoney( address, network );
                         } catch( e ) {
                             var once_had_money = false;
                         }
+                        console.log( i, 2 );
                         if ( !once_had_money ) {
                             i2 = Number( i2 ) + 1;
                             gap = gap + 1;
                         } else {
                             i1 = Number( i1 ) + 1;
+                            console.log( i, 3 );
                             var utxos_in_this_address = await getUTXOs( privkey, network );
+                            console.log( i, 4 );
                             utxos_in_this_address.forEach( utxo => {
                                 available_utxos.push( utxo );
                             });
