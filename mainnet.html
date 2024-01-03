@@ -334,7 +334,7 @@
                 if ( getting_utxos ) return;
                 getting_utxos = true;
                 var backup_words = backups[ "backup_words" ];
-                backups[ "utxos" ] = await checkAddresses( backup_words, "testnet/" );
+                backups[ "utxos" ] = await checkAddresses( backup_words, "" );
                 localStorage[ "backups" ] = JSON.stringify( backups );
                 utxos_loaded = true;
                 getting_utxos = false;
@@ -343,14 +343,14 @@
                 if ( getting_receive ) return;
                 getting_receive = true;
                 var backup_words = backups[ "backup_words" ];
-                fresh_receive_address = await getFirstUnusedReceiveAddress( backup_words, "testnet/" );
+                fresh_receive_address = await getFirstUnusedReceiveAddress( backup_words, "" );
                 getting_receive = false;
             }
             var makeChange = async () => {
                 if ( getting_change ) return;
                 getting_change = true;
                 var backup_words = backups[ "backup_words" ];
-                fresh_change_address = await getFirstUnusedChangeAddress( backup_words, "testnet/" );
+                fresh_change_address = await getFirstUnusedChangeAddress( backup_words, "" );
                 getting_change = false;
             }
             var init = async test => {
@@ -410,7 +410,7 @@
                 $( `.${reveal}` ).classList.remove( "hidden" );
             }
 
-            //spendCoins( "tb1qd28npep0s8frcm3y7dxqajkcy2m40eysplyr9v", 1000, "testnet/" );
+            //spendCoins( "tb1qd28npep0s8frcm3y7dxqajkcy2m40eysplyr9v", 1000, "" );
             var spendCoins = async ( destino, amt, sats_per_byte, network ) => {
                 var inputs = [];
                 var outputs = [];
@@ -651,10 +651,10 @@
                     var backup_words = backups[ "backup_words" ];
                     showProgress( 1, 7, `getting a fresh address` );
                     console.log( `step 1 of 6, getting a fresh address` );
-                    var recovery_address = await alt_getFirstUnusedChangeAddress( backup_words, "testnet/" );
+                    var recovery_address = await alt_getFirstUnusedChangeAddress( backup_words, "" );
                     showProgress( 2, 7, `getting a second fresh address` );
                     console.log( `step 2 of 6, getting a second fresh address` );
-                    var principle_address = await alt_getFirstUnusedReceiveAddress( backup_words, "testnet/" );
+                    var principle_address = await alt_getFirstUnusedReceiveAddress( backup_words, "" );
                     var timelock = content.duration_of_loan * 30 * 144 + current_blockheight;
                     if ( $_GET[ "test_short_loans" ] ) timelock = current_blockheight + Number( $_GET[ "test_short_loans" ] );
                     var script_timelock = convertNumToScript( timelock );
@@ -666,7 +666,7 @@
                     var tree = scripts.map(s => tapscript.Tap.encodeScript(s))
                     var pubkey = "ab".repeat( 32 );
                     var [ tpubkey ] = tapscript.Tap.getPubKey(pubkey, { tree });
-                    var contract_address = tapscript.Address.p2tr.fromPubKey( tpubkey, 'testnet' );
+                    var contract_address = tapscript.Address.p2tr.fromPubKey( tpubkey, '' );
                     showProgress( 3, 7, `waiting for lender's reply` );
                     console.log( `step 3 of 6, waiting for lender's reply` );
                     var message_for_lender = {
@@ -737,10 +737,10 @@
                     var backup_words = backups[ "backup_words" ];
                     showProgress( 1, 7, `getting a fresh address` );
                     console.log( `step 1 of 6, getting a fresh address` );
-                    var recovery_address = await alt_getFirstUnusedChangeAddress( backup_words, "testnet/" );
+                    var recovery_address = await alt_getFirstUnusedChangeAddress( backup_words, "" );
                     showProgress( 2, 7, `getting a second fresh address` );
                     console.log( `step 2 of 6, getting a second fresh address` );
-                    var principle_address = await alt_getFirstUnusedReceiveAddress( backup_words, "testnet/" );
+                    var principle_address = await alt_getFirstUnusedReceiveAddress( backup_words, "" );
                     var timelock = content.duration_of_loan * 30 * 144 + current_blockheight;
                     if ( $_GET[ "test_short_loans" ] ) timelock = current_blockheight + Number( $_GET[ "test_short_loans" ] );
                     var script_timelock = convertNumToScript( timelock );
@@ -752,7 +752,7 @@
                     var tree = scripts.map(s => tapscript.Tap.encodeScript(s))
                     var pubkey = "ab".repeat( 32 );
                     var [ tpubkey ] = tapscript.Tap.getPubKey(pubkey, { tree });
-                    var contract_address = tapscript.Address.p2tr.fromPubKey( tpubkey, 'testnet' );
+                    var contract_address = tapscript.Address.p2tr.fromPubKey( tpubkey, '' );
                     showProgress( 3, 7, `waiting for lender's reply` );
                     console.log( `step 3 of 6, waiting for lender's reply` );
                     var message_for_lender = {
@@ -1191,7 +1191,7 @@
                 var seizure_script = scripts[ 0 ];
                 var seizure_target = tapscript.Tap.encodeScript(seizure_script);
                 var [ tpubkey, seizure_cblock ] = tapscript.Tap.getPubKey(pubkey, { tree, target: seizure_target });
-                var contract_address = tapscript.Address.p2tr.fromPubKey( tpubkey, 'testnet' );
+                var contract_address = tapscript.Address.p2tr.fromPubKey( tpubkey, '' );
                 if ( contract_address != json[ "contract" ] ) return;
                 var utxos_for_this_transaction = [];
                 backups.utxos.forEach( utxo => {
@@ -1250,7 +1250,7 @@
                 //this optional third vout (vout 2) gives some change, if necessary, to the lender
                 if ( lender_change ) {
                     var backup_words = backups[ "backup_words" ];
-                    var lender_change_address = await alt_getFirstUnusedChangeAddress( backup_words, "testnet/" );
+                    var lender_change_address = await alt_getFirstUnusedChangeAddress( backup_words, "" );
                     outputs.push({
                         value: lender_change,
                         scriptPubKey: tapscript.Address.toScriptPubKey( lender_change_address ),
@@ -1281,7 +1281,7 @@
                 var mining_fee = txsize * sats_per_byte;
                 if ( mining_fee < 172 ) mining_fee = 172;
                 if ( !( "recovery" in json ) ) return console.log( "recovery address had no recovery address:", json );
-                var repayment_address = await alt_getFirstUnusedReceiveAddress( backup_words, "testnet/" );
+                var repayment_address = await alt_getFirstUnusedReceiveAddress( backup_words, "" );
                 var repayment_txdata = tapscript.Tx.create({
                     vin: [{
                         txid: txid,
@@ -1832,7 +1832,7 @@
                         var sum_of_values = 0;
                         inputs.forEach( item => sum_of_values = sum_of_values + item[ "prevout" ][ "value" ] );
                         var backup_words = backups[ "backup_words" ];
-                        var change_address = await alt_getFirstUnusedChangeAddress( backup_words, "testnet/" );
+                        var change_address = await alt_getFirstUnusedChangeAddress( backup_words, "" );
                         var txsize = 0;
                         inputs.forEach( item => txsize = txsize + 64 + 32 + 8 );
                         var i; for ( i=0; i<outputs.length; i++ ) {
@@ -2023,7 +2023,7 @@
                         var sum_of_values = 0;
                         inputs.forEach( item => sum_of_values = sum_of_values + item[ "prevout" ][ "value" ] );
                         var backup_words = backups[ "backup_words" ];
-                        var change_address = await alt_getFirstUnusedChangeAddress( backup_words, "testnet/" );
+                        var change_address = await alt_getFirstUnusedChangeAddress( backup_words, "" );
                         //there is only 1 output and 1 output so I just add 104 bytes for the input and, for the output, 33 bytes for the scriptPubkey and 4 bytes for the value
                         var txsize = 64 + 32 + 8;
                         txsize = txsize + 37;
@@ -2797,7 +2797,7 @@
                 var sats_per_byte = $( '.mining_fee' ).innerText;
                 sats_per_byte = Number( sats_per_byte );
                 if ( !sats_per_byte ) return showModal( "You entered an invalid fee rate. You must enter a number greater than 0, such as 5, 10, or 25. Please try again." );
-                spendCoins( destino, amt, sats_per_byte, "testnet/" );
+                spendCoins( destino, amt, sats_per_byte, "" );
             }
             $( '.submit_loan_offer' ).onclick = async () => {
                 var btc_holdings = 0;
@@ -3014,7 +3014,7 @@
             $( '.receive' ).onclick = async () => {
                 var backup_words = backups[ "backup_words" ];
                 if ( !backup_words ) return;
-                var address = await alt_getFirstUnusedReceiveAddress( backup_words, "testnet/" );
+                var address = await alt_getFirstUnusedReceiveAddress( backup_words, "" );
                 var url = "bitcoin:" + address;
                 var a = document.createElement( "a" );
                 a.href = url;
