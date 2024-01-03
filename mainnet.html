@@ -251,6 +251,7 @@
                     var i2 = 0;
                     var gap = 0;
                     var i; for ( i=0; i<100_000; i++ ) {
+                        console.log( i );
                         receive_num = i;
                         receive_gap = gap;
                         var html =`<h3>Debug info</h3><p>Scanning for utxos. There are two sets of bitcoin addresses in your wallet, "receive" addresses and "change" addresses. We scan them both with a gap limit of 20, then update your balance, then restart.</p>`;
@@ -288,6 +289,7 @@
                     var i2 = 0;
                     var gap = 0;
                     var i; for ( i=0; i<100_000; i++ ) {
+                        console.log( i );
                         change_num = i;
                         change_gap = gap;
                         var html =`<h3>Debug info</h3><p>Scanning for utxos. There are two sets of bitcoin addresses in your wallet, "receive" addresses and "change" addresses. We scan them both with a gap limit of 20, then update your balance, then restart.</p><p>Number of receive addresses checked: ${receive_num}</p><p>Gap limit for your receive addresses: ${receive_gap}</p>`;
