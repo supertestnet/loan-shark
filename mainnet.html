@@ -260,7 +260,11 @@
                         var path = `86'/0'/0'`;
                         var privkey = getPrivkeyHex( backup_words, path, i1 + i2 );
                         var address = getTaprootAddressFromPrivkeyHex( privkey, network );
-                        var once_had_money = await addressOnceHadMoney( address, network );
+                        try {
+                            var once_had_money = await addressOnceHadMoney( address, network );
+                        } catch( e ) {
+                            var once_had_money = false;
+                        }
                         if ( !once_had_money ) {
                             i2 = Number( i2 ) + 1;
                             gap = gap + 1;
@@ -294,7 +298,11 @@
                         var privkey = getPrivkeyHex( backup_words, path, i1 + i2 );
                         var address = getTaprootAddressFromPrivkeyHex( privkey, network );
                         var balance = await getAddressBalance( address, network );
-                        var once_had_money = await addressOnceHadMoney( address, network );
+                        try {
+                            var once_had_money = await addressOnceHadMoney( address, network );
+                        } catch( e ) {
+                            var once_had_money = false;
+                        }
                         if ( !once_had_money ) {
                             i2 = Number( i2 ) + 1;
                             gap = gap + 1;
