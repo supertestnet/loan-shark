@@ -312,8 +312,10 @@
             }
 
             async function checkAddresses( backup_words, network ) {
-                var available_utxos_1 = await getAvailableUtxosFromReceivePath( backup_words, network );
-                var available_utxos_2 = await getAvailableUtxosFromChangePath( backup_words, network );
+                try {
+                    var available_utxos_1 = await getAvailableUtxosFromReceivePath( backup_words, network );
+                    var available_utxos_2 = await getAvailableUtxosFromChangePath( backup_words, network );
+                } catch( e ) {}
                 available_utxos_2.forEach( function( item ) {
                     available_utxos_1.push( item );
                 });
